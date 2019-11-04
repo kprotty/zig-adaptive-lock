@@ -16,33 +16,33 @@ Relative improvement: -nanx
 --------------------
 100000 Iterations
 --------------------
-std.Mutex     took 6 ms
-AdaptiveMutex took 4 ms
-Relative improvement: 1.50x
+std.Mutex     took 7 ms
+AdaptiveMutex took 2 ms
+Relative improvement: 3.50x
 --------------------
 1000000 Iterations
 --------------------
-std.Mutex     took 65 ms
-AdaptiveMutex took 25 ms
-Relative improvement: 2.60x
+std.Mutex     took 71 ms
+AdaptiveMutex took 26 ms
+Relative improvement: 2.73x
 --------------------
 1000000 Iterations
 --------------------
-std.Mutex     took 66 ms
-AdaptiveMutex took 25 ms
-Relative improvement: 2.64x
+std.Mutex     took 71 ms
+AdaptiveMutex took 27 ms
+Relative improvement: 2.63x
 --------------------
 10000000 Iterations
 --------------------
-std.Mutex     took 665 ms
-AdaptiveMutex took 255 ms
-Relative improvement: 2.61x
+std.Mutex     took 710 ms
+AdaptiveMutex took 261 ms
+Relative improvement: 2.72x
 --------------------
 100000000 Iterations
 --------------------
-std.Mutex     took 6616 ms
-AdaptiveMutex took 2537 ms
-Relative improvement: 2.61x
+std.Mutex     took 7128 ms
+AdaptiveMutex took 2618 ms
+Relative improvement: 2.72x
 ```
 
 # ReleaseFast
@@ -68,25 +68,25 @@ Relative improvement: 2.50x
 --------------------
 1000000 Iterations
 --------------------
-std.Mutex     took 53 ms
-AdaptiveMutex took 22 ms
-Relative improvement: 2.41x
+std.Mutex     took 52 ms
+AdaptiveMutex took 24 ms
+Relative improvement: 2.17x
 --------------------
 1000000 Iterations
 --------------------
-std.Mutex     took 53 ms
-AdaptiveMutex took 22 ms
-Relative improvement: 2.41x
+std.Mutex     took 52 ms
+AdaptiveMutex took 23 ms
+Relative improvement: 2.26x
 --------------------
 10000000 Iterations
 --------------------
-std.Mutex     took 555 ms
-AdaptiveMutex took 229 ms
-Relative improvement: 2.42x
+std.Mutex     took 530 ms
+AdaptiveMutex took 223 ms
+Relative improvement: 2.38x
 --------------------
 100000000 Iterations
 --------------------
-std.Mutex     took 5544 ms
-AdaptiveMutex took 2290 ms
-Relative improvement: 2.42x
+std.Mutex     took 5324 ms
+AdaptiveMutex took 2242 ms
+Relative improvement: 2.37x
 ```
