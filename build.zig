@@ -9,7 +9,7 @@ pub fn build(b: *std.build.Builder) void {
     const bench = b.addExecutable("bench", "src/main.zig");
     bench.setBuildMode(build_mode);
     bench.setTheTarget(target);
-    if (link_libc or (builtin.os != .windows and .os != .linux))
+    if (link_libc or (!target.isWindows() and !target.isLinux()))
         bench.linkLibC();
 
     const step = b.step("bench", "Run the benchmark");
