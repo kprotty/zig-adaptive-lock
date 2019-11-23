@@ -4,45 +4,91 @@ System: Intel Core i9 (2.4ghz, 4-core, hyperthreaded) - macOS Catalina 10.15.1 B
 --------------------
 1000 Iterations
 --------------------
-std.Mutex     took 1 ms
-AdaptiveMutex took 0 ms
-Relative improvement: infx
+Standard took 0 ms
+Custom   took 0 ms
+Relative improvement: -nanx
 --------------------
 10000 Iterations
 --------------------
-std.Mutex     took 10 ms
-AdaptiveMutex took 0 ms
-Relative improvement: infx
+Standard took 0 ms
+Custom   took 0 ms
+Relative improvement: -nanx
 --------------------
 100000 Iterations
 --------------------
-std.Mutex     took 90 ms
-AdaptiveMutex took 4 ms
-Relative improvement: 22.50x
+Standard took 3 ms
+Custom   took 2 ms
+Relative improvement: 1.50x
 --------------------
 1000000 Iterations
 --------------------
-std.Mutex     took 984 ms
-AdaptiveMutex took 43 ms
-Relative improvement: 22.88x
+Standard took 32 ms
+Custom   took 30 ms
+Relative improvement: 1.07x
 --------------------
 1000000 Iterations
 --------------------
-std.Mutex     took 963 ms
-AdaptiveMutex took 42 ms
-Relative improvement: 22.93x
+Standard took 32 ms
+Custom   took 28 ms
+Relative improvement: 1.14x
 --------------------
 10000000 Iterations
 --------------------
-std.Mutex     took 9021 ms
-AdaptiveMutex took 422 ms
-Relative improvement: 21.38x
+Standard took 317 ms
+Custom   took 287 ms
+Relative improvement: 1.10x
 --------------------
 100000000 Iterations
 --------------------
-std.Mutex     took 99959 ms
-AdaptiveMutex took 4410 ms
-Relative improvement: 22.67x
+Standard took 3233 ms
+Custom   took 2881 ms
+Relative improvement: 1.12x
+```
+
+# ReleaseSafe
+```
+--------------------
+1000 Iterations
+--------------------
+Standard took 0 ms
+Custom   took 0 ms
+Relative improvement: -nanx
+--------------------
+10000 Iterations
+--------------------
+Standard took 0 ms
+Custom   took 0 ms
+Relative improvement: -nanx
+--------------------
+100000 Iterations
+--------------------
+Standard took 3 ms
+Custom   took 2 ms
+Relative improvement: 1.50x
+--------------------
+1000000 Iterations
+--------------------
+Standard took 32 ms
+Custom   took 30 ms
+Relative improvement: 1.07x
+--------------------
+1000000 Iterations
+--------------------
+Standard took 32 ms
+Custom   took 28 ms
+Relative improvement: 1.14x
+--------------------
+10000000 Iterations
+--------------------
+Standard took 317 ms
+Custom   took 287 ms
+Relative improvement: 1.10x
+--------------------
+100000000 Iterations
+--------------------
+Standard took 3233 ms
+Custom   took 2881 ms
+Relative improvement: 1.12x
 ```
 
 # ReleaseFast
@@ -50,43 +96,43 @@ Relative improvement: 22.67x
 --------------------
 1000 Iterations
 --------------------
-std.Mutex     took 0 ms
-AdaptiveMutex took 0 ms
+Standard took 0 ms
+Custom   took 0 ms
 Relative improvement: -nanx
 --------------------
 10000 Iterations
 --------------------
-std.Mutex     took 6 ms
-AdaptiveMutex took 0 ms
-Relative improvement: infx
+Standard took 0 ms
+Custom   took 0 ms
+Relative improvement: -nanx
 --------------------
 100000 Iterations
 --------------------
-std.Mutex     took 68 ms
-AdaptiveMutex took 3 ms
-Relative improvement: 22.67x
+Standard took 2 ms
+Custom   took 2 ms
+Relative improvement: 1.00x
 --------------------
 1000000 Iterations
 --------------------
-std.Mutex     took 715 ms
-AdaptiveMutex took 34 ms
-Relative improvement: 21.03x
+Standard took 26 ms
+Custom   took 26 ms
+Relative improvement: 1.00x
 --------------------
 1000000 Iterations
 --------------------
-std.Mutex     took 715 ms
-AdaptiveMutex took 36 ms
-Relative improvement: 19.86x
+Standard took 26 ms
+Custom   took 26 ms
+Relative improvement: 1.00x
 --------------------
 10000000 Iterations
 --------------------
-std.Mutex     took 6326 ms
-AdaptiveMutex took 343 ms
-Relative improvement: 18.44x
+Standard took 263 ms
+Custom   took 276 ms
+Relative improvement: 0.95x
 --------------------
 100000000 Iterations
 --------------------
-std.Mutex     took 65187 ms
-AdaptiveMutex took 3392 ms
-Relative improvement: 19.22x
+Standard took 2728 ms
+Custom   took 2763 ms
+Relative improvement: 0.99x
 ```
