@@ -14,9 +14,10 @@ pub fn main() !void {
         1000 * 1000,
         1 * 1000 * 1000,
         10 * 1000 * 1000,
-        100 * 1000 * 1000,
+        // 100 * 1000 * 1000,
     };
 
+    while (true) {
     inline for (iterations) |iters| {
         std.debug.warn(("-" ** 20) ++ "\n");
         std.debug.warn("{} Iterations\n", iters);
@@ -25,6 +26,7 @@ pub fn main() !void {
         const custom_time = try bench(threads, BenchContention(AdaptiveMutex, iters));
         const improvement = @intToFloat(f64, std_time) / @intToFloat(f64, custom_time);
         std.debug.warn("Relative improvement: {d:.2}x\n", improvement);
+    }
     }
 }
 
