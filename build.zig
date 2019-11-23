@@ -6,7 +6,7 @@ pub fn build(b: *std.build.Builder) void {
     const link_libc = b.option(bool, "libc", "Link libc") orelse false;
     const target = b.standardTargetOptions(null);
 
-    const bench = b.addExecutable("bench", "bench.zig");
+    const bench = b.addExecutable("bench", "src/main.zig");
     bench.setBuildMode(build_mode);
     bench.setTheTarget(target);
     if (link_libc or (builtin.os != .windows and .os != .linux))
