@@ -325,6 +325,12 @@ const PosixEvent = struct {
         return had_waiter;
     }
 
+    extern "c" fn pthread_cond_timedwait(
+        noalias cond: *c.pthread_cond_t,
+        noalias mutex: *c.pthread_mutex_t,
+        noalias abstime: *const os.timespec,
+    ) c_int;
+
     pub fn wait(self: *PosixEvent, timeout: ?u64) ResetEvent.WaitError!bool {
         assert(c.pthread_mutex_lock(&self.mutex) == 0);
         defer assert(c.pthread_mutex_unlock(&self.mutex) == 0);
@@ -348,7 +354,7 @@ const PosixEvent = struct {
         while (self.state == wait_token) {
             const rc = switch (timeout == null) {
                 true => c.pthread_cond_wait(&self.cond, &self.mutex),
-                else => c.pthread_cond_timedwait(&self.cond, &self.mutex, ts_ptr),
+                else => pthread_cond_timedwait(&self.cond, &self.mutex, ts_ptr),
             };
             // TODO: rc appears to be the positive error code making os.errno() always return 0 on linux
             switch (std.math.max(@as(c_int, os.errno(rc)), rc)) {

@@ -1,48 +1,94 @@
-System: Intel i7-6700k (4ghz, 4-core, hyperthreaded) - Arch Linux x86_64 Kernel 5.3.8
+System: Intel i7-6700k (4ghz, 4-core, hyperthreaded) - Arch Linux x86_64 Kernel 5.3.12
 # Debug
 ```
 --------------------
 1000 Iterations
 --------------------
-std.Mutex     took 0 ms
-AdaptiveMutex took 0 ms
+Standard took 0 ms
+Custom   took 0 ms
 Relative improvement: -nanx
 --------------------
 10000 Iterations
 --------------------
-std.Mutex     took 0 ms
-AdaptiveMutex took 0 ms
+Standard took 0 ms
+Custom   took 0 ms
 Relative improvement: -nanx
 --------------------
 100000 Iterations
 --------------------
-std.Mutex     took 6 ms
-AdaptiveMutex took 4 ms
-Relative improvement: 1.50x
+Standard took 2 ms
+Custom   took 2 ms
+Relative improvement: 1.00x
 --------------------
 1000000 Iterations
 --------------------
-std.Mutex     took 65 ms
-AdaptiveMutex took 25 ms
-Relative improvement: 2.60x
+Standard took 29 ms
+Custom   took 23 ms
+Relative improvement: 1.26x
 --------------------
 1000000 Iterations
 --------------------
-std.Mutex     took 66 ms
-AdaptiveMutex took 25 ms
-Relative improvement: 2.64x
+Standard took 27 ms
+Custom   took 24 ms
+Relative improvement: 1.13x
 --------------------
 10000000 Iterations
 --------------------
-std.Mutex     took 665 ms
-AdaptiveMutex took 255 ms
-Relative improvement: 2.61x
+Standard took 275 ms
+Custom   took 244 ms
+Relative improvement: 1.13x
 --------------------
 100000000 Iterations
 --------------------
-std.Mutex     took 6616 ms
-AdaptiveMutex took 2537 ms
-Relative improvement: 2.61x
+Standard took 2757 ms
+Custom   took 2425 ms
+Relative improvement: 1.14x
+```
+
+# ReleaseSafe
+```
+--------------------
+1000 Iterations
+--------------------
+Standard took 0 ms
+Custom   took 0 ms
+Relative improvement: -nanx
+--------------------
+10000 Iterations
+--------------------
+Standard took 0 ms
+Custom   took 0 ms
+Relative improvement: -nanx
+--------------------
+100000 Iterations
+--------------------
+Standard took 2 ms
+Custom   took 1 ms
+Relative improvement: 2.00x
+--------------------
+1000000 Iterations
+--------------------
+Standard took 23 ms
+Custom   took 17 ms
+Relative improvement: 1.35x
+--------------------
+1000000 Iterations
+--------------------
+Standard took 23 ms
+Custom   took 18 ms
+Relative improvement: 1.28x
+--------------------
+10000000 Iterations
+--------------------
+Standard took 241 ms
+Custom   took 182 ms
+Relative improvement: 1.32x
+--------------------
+100000000 Iterations
+--------------------
+Standard took 2414 ms
+Custom   took 1830 ms
+Relative improvement: 1.32x
 ```
 
 # ReleaseFast
@@ -50,43 +96,43 @@ Relative improvement: 2.61x
 --------------------
 1000 Iterations
 --------------------
-std.Mutex     took 0 ms
-AdaptiveMutex took 0 ms
+Standard took 0 ms
+Custom   took 0 ms
 Relative improvement: -nanx
 --------------------
 10000 Iterations
 --------------------
-std.Mutex     took 0 ms
-AdaptiveMutex took 0 ms
+Standard took 0 ms
+Custom   took 0 ms
 Relative improvement: -nanx
 --------------------
 100000 Iterations
 --------------------
-std.Mutex     took 5 ms
-AdaptiveMutex took 2 ms
-Relative improvement: 2.50x
+Standard took 2 ms
+Custom   took 1 ms
+Relative improvement: 2.00x
 --------------------
 1000000 Iterations
 --------------------
-std.Mutex     took 53 ms
-AdaptiveMutex took 22 ms
-Relative improvement: 2.41x
+Standard took 21 ms
+Custom   took 17 ms
+Relative improvement: 1.24x
 --------------------
 1000000 Iterations
 --------------------
-std.Mutex     took 53 ms
-AdaptiveMutex took 22 ms
-Relative improvement: 2.41x
+Standard took 23 ms
+Custom   took 18 ms
+Relative improvement: 1.28x
 --------------------
 10000000 Iterations
 --------------------
-std.Mutex     took 555 ms
-AdaptiveMutex took 229 ms
-Relative improvement: 2.42x
+Standard took 230 ms
+Custom   took 182 ms
+Relative improvement: 1.26x
 --------------------
 100000000 Iterations
 --------------------
-std.Mutex     took 5544 ms
-AdaptiveMutex took 2290 ms
-Relative improvement: 2.42x
+Standard took 2328 ms
+Custom   took 1816 ms
+Relative improvement: 1.28x
 ```
