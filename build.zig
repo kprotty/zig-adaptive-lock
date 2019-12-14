@@ -9,6 +9,7 @@ pub fn build(b: *std.build.Builder) void {
     const bench = b.addExecutable("bench", "src/main.zig");
     bench.setBuildMode(build_mode);
     bench.setTheTarget(target);
+    bench.setOutputDir("zig-cache");
     if (link_libc or (!target.isWindows() and !target.isLinux()))
         bench.linkLibC();
 
