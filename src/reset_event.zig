@@ -94,12 +94,14 @@ const AtomicEvent = struct {
         @atomicStore(State, &self.state, .Empty, .Monotonic);
     }
 
-    pub fn set(self: *AtomicEvent) void {
+    pub fn set(self: *AtomicEvent) void { return Futex.wake(@ptrCast(*i32, &self.state)); }
+    pub fn _set(self: *AtomicEvent) void {
         if (@atomicRmw(State, &self.state, .Xchg, .Signaled, .Release) == .Waiting)
             Futex.wake(@ptrCast(*const i32, &self.state));
     }
 
-    pub fn wait(self: *AtomicEvent) void {
+    pub fn wait(self: *AtomicEvent) void { return Futex.wait(@ptrCast(*i32, &self.state)); }
+    pub fn _wait(self: *AtomicEvent) void {
         var state = @atomicLoad(State, &self.state, .Acquire);
         while (state == .Empty) {
             state = @cmpxchgWeak(State, &self.state, .Empty, .Waiting, .Acquire, .Acquire) orelse {
@@ -144,14 +146,32 @@ const AtomicEvent = struct {
     };
 
     const WindowsFutex = struct {
-        fn wake(ptr: *const i32) void {
+        extern "kernel32" stdcallcc fn GetCurrentThreadId() u32;
+        extern "ntdll" stdcallcc fn NtAlertThreadByThreadId(id: u32) u32;
+        extern "ntdll" stdcallcc fn NtWaitForAlertByThreadId(addr: usize, timeout: ?*i64) u32;
+
+        fn wake(ptr: *i32) void {
+            const tid = @atomicRmw(i32, ptr, .Xchg, 1 << 29, .Acquire);
+            if (tid != 0) {
+                _ = NtAlertThreadByThreadId(@bitCast(u32, tid));
+            }
+        }
+
+        fn wait(ptr: *i32) void {
+            const tid = @bitCast(i32, GetCurrentThreadId());
+            if (@cmpxchgStrong(i32, ptr, 0, tid, .Release, .Monotonic) == null) {
+                _ = NtWaitForAlertByThreadId(@ptrToInt(ptr), null);
+            }
+        }
+
+        fn _wake(ptr: *const i32) void {
             const handle = getEventHandle() orelse return SpinFutex.wake(ptr);
             const key = @ptrCast(*const c_void, ptr);
             const rc = windows.ntdll.NtReleaseKeyedEvent(handle, key, windows.FALSE, null);
             assert(rc == 0);
         }
 
-        fn wait(ptr: *const i32, expected: i32) void {
+        fn _wait(ptr: *const i32, expected: i32) void {
             const handle = getEventHandle() orelse return SpinFutex.wait(ptr, expected);
             const key = @ptrCast(*const c_void, ptr);
             const rc = windows.ntdll.NtWaitForKeyedEvent(handle, key, windows.FALSE, null);

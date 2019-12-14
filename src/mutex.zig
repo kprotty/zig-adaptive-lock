@@ -44,6 +44,14 @@ else
         const QUEUE_LOCK: usize = 2;
         const QUEUE_MASK: usize = ~(MUTEX_LOCK | QUEUE_LOCK);
 
+        fn yield() void {
+            if (comptime std.Target.current.isWindows()) {
+                std.SpinLock.yield(404);
+            } else {
+                std.os.sched_yield() catch std.SpinLock.yield(30);
+            }
+        }
+
         const Node = struct {
             next: ?*Node,
             event: ResetEvent,
@@ -66,25 +74,27 @@ else
         }
 
         fn acquireSlow(self: *Mutex, current_state: usize) void {
+            @setCold(true);
             while (true) {
                 var state = current_state;
                 var spin_count: usize = 0;
-                while (spin_count < 30) : (spin_count += 1) {
+                while (spin_count < 40) : (spin_count += 1) {
                     if ((state & MUTEX_LOCK) == 0) {
                         state = @cmpxchgWeak(usize, &self.state, state, state | MUTEX_LOCK, .Acquire, .Monotonic) orelse return;
+                        std.SpinLock.yield(1);
                     } else if ((state & QUEUE_MASK) != 0) {
                         break;
                     } else {
+                        yield();
                         state = @atomicLoad(usize, &self.state, .Monotonic);
                     }
-                    std.os.sched_yield() catch unreachable;
                 }
 
                 var node: Node = undefined;
                 node.event = ResetEvent.init();
                 defer node.event.deinit();
 
-                while (true) : (std.os.sched_yield() catch unreachable) {
+                while (true) : (std.SpinLock.yield(1)) {
                     if ((state & MUTEX_LOCK) == 0) {
                         state = @cmpxchgWeak(usize, &self.state, state, state | MUTEX_LOCK, .Acquire, .Monotonic) orelse return;
                     } else {
@@ -110,14 +120,15 @@ else
         };
 
         fn releaseSlow(self: *Mutex, current_state: usize) void {
+            @setCold(true);
             var state = current_state;
-            while (true) : (std.os.sched_yield() catch unreachable) {
+            while (true) : (std.SpinLock.yield(1)) {
                 if ((state & QUEUE_LOCK) != 0 or (state & QUEUE_MASK) == 0)
                     return;
                 state = @cmpxchgWeak(usize, &self.state, state, state | QUEUE_LOCK, .Acquire, .Monotonic) orelse break;
             }
 
-            while (true) : (std.os.sched_yield() catch unreachable) {
+            while (true) : (yield()) {
                 if ((state & MUTEX_LOCK) != 0) {
                     state = @cmpxchgWeak(usize, &self.state, state, state & ~QUEUE_LOCK, .Release, .Acquire) orelse return;
                 } else {

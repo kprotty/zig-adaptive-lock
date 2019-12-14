@@ -1,6 +1,34 @@
 const std = @import("std");
-const Standard = StdMutex;
-const CustomMutex = @import("./mutex.zig").Mutex;
+const Standard = SrwLock; // StdMutex;
+const CustomMutex = @import("./lock.zig").Mutex; // @import("./mutex.zig").Mutex;
+
+const SrwLock = struct {
+    data: [2]usize,
+
+    pub fn init() @This() {
+        return @This(){ .data = .{0, 0} };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        self.* = undefined;
+    }
+
+    pub fn acquire(self: *@This()) Held {
+        AcquireSRWLockExclusive(@ptrToInt(self));
+        return Held{ .mutex = self };
+    }
+
+    pub const Held = struct {
+        mutex: *SrwLock,
+
+        pub fn release(self: Held) void {
+            ReleaseSRWLockExclusive(@ptrToInt(self.mutex));
+        }
+    };
+
+    extern "kernel32" stdcallcc fn AcquireSRWLockExclusive(ptr: usize) void;
+    extern "kernel32" stdcallcc fn ReleaseSRWLockExclusive(ptr: usize) void;
+};
 
 const StdMutex = struct {
     lock: u32,
@@ -13,13 +41,17 @@ const StdMutex = struct {
         self.* = undefined;
     }
 
+    fn yield() void {
+        if (comptime std.Target.current.isWindows()) {
+            std.SpinLock.yield(500);
+        } else {
+            std.os.sched_yield() catch std.SpinLock.yield(30);
+        }
+    }
+
     pub fn acquire(self: *@This()) Held {
         while (@atomicRmw(u32, &self.lock, .Xchg, 0, .Acquire) == 0) {
-            if (comptime std.Target.current.isWindows()) {
-                std.SpinLock.yield(100);
-            } else {
-                std.os.sched_yield() catch std.SpinLock.yield(30);
-            }
+            yield();
         }
         return Held{ .mutex = self };
     }
@@ -51,7 +83,7 @@ pub fn main() !void {
         std.debug.warn(("-" ** 20) ++ "\n", .{});
         std.debug.warn("{} Iterations\n", .{iters});
         std.debug.warn(("-" ** 20) ++ "\n", .{});
-        const std_time = try bench(threads, iters, StdMutex);
+        const std_time = try bench(threads, iters, Standard);
         const custom_time = try bench(threads, iters, CustomMutex);
         const improvement = @intToFloat(f64, std_time) / @intToFloat(f64, custom_time);
         std.debug.warn("Relative improvement: {d:.2}x\n", .{improvement});
@@ -72,6 +104,7 @@ fn bench(threads: []*std.Thread, comptime iters: u128, comptime Mutex: type) !u6
                 defer held.release();
                 if (self.value == iters)
                     return;
+                //var x: usize = undefined; for (@as([10]u8, undefined)) |_| _ = @atomicRmw(usize, &x, .Xchg, 1, .SeqCst);
                 const is_done = self.value == iters - 1;
                 self.value += 1;
                 if (is_done) {
