@@ -1,4 +1,4 @@
-System: Intel Core i9 (2.4ghz, 4-core, hyperthreaded) - macOS Catalina 10.15.1 Beta (19B77a)
+System: Intel Core i9 9900k (3.6ghz, 8-core, hyperthreaded) - macOS Catalina 10.15.2 Beta (19C46a)
 # Debug
 ```
 --------------------
