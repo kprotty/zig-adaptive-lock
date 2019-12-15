@@ -1,6 +1,6 @@
 const std = @import("std");
-const Standard = StdMutex;
-const CustomMutex = @import("./linux.zig").Mutex; // @import("./mutex.zig").Mutex;
+const Standard = StdMutex; // @import("./mutex.zig").Mutex;
+const CustomMutex = @import("./mutex.zig").ParkingMutex;
 
 const StdMutex = struct {
     lock: u32,

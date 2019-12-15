@@ -3,145 +3,215 @@ const builtin = @import("builtin");
 const testing = std.testing;
 const ResetEvent = @import("./reset_event.zig").ResetEvent;
 
+pub const ParkingMutex = struct {
+    state: usize,
+
+    const MUTEX_LOCK: usize = 1;
+    const QUEUE_LOCK: usize = 2;
+    const QUEUE_MASK: usize = ~(MUTEX_LOCK | QUEUE_LOCK);
+
+    fn yield() void {
+        std.os.sched_yield() catch std.SpinLock.yield(30);
+    }
+
+    const Node = struct {
+        next: ?*Node,
+        event: ResetEvent,
+    };
+
+    pub fn init() @This() {
+        return @This(){
+            .state = 0
+        };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        self.* = undefined;
+    }
+
+    pub fn acquire(self: *@This()) Held {
+        if (@cmpxchgWeak(usize, &self.state, 0, MUTEX_LOCK, .Acquire, .Monotonic)) |current|
+            self.acquireSlow(current);
+        return Held{ .mutex = self };
+    }
+
+    fn acquireSlow(self: *@This(), current_state: usize) void {
+        @setCold(true);
+        while (true) {
+            var state = current_state;
+            var spin_count: u23 = 40;
+            while (spin_count != 0) : (spin_count -= 1) {
+                if ((state & MUTEX_LOCK) == 0) {
+                    state = @cmpxchgWeak(usize, &self.state, state, state | MUTEX_LOCK, .Acquire, .Monotonic) orelse return;
+                    std.SpinLock.yield(1);
+                } else if ((state & QUEUE_MASK) != 0) {
+                    break;
+                } else {
+                    yield();
+                    state = @atomicLoad(usize, &self.state, .Monotonic);
+                }
+            }
+
+            var node: Node = undefined;
+            node.event = ResetEvent.init();
+            defer node.event.deinit();
+
+            while (true) : (std.SpinLock.yield(1)) {
+                if ((state & MUTEX_LOCK) == 0) {
+                    state = @cmpxchgWeak(usize, &self.state, state, state | MUTEX_LOCK, .Acquire, .Monotonic) orelse return;
+                } else {
+                    node.next = @intToPtr(?*Node, state & QUEUE_MASK);
+                    const new_state = @ptrToInt(&node) | (state & ~QUEUE_MASK);
+                    state = @cmpxchgWeak(usize, &self.state, state, new_state, .Release, .Monotonic) orelse {
+                        node.event.wait();
+                        break;
+                    };
+                }
+            }
+        }
+    }
+
+    pub const Held = struct {
+        mutex: *ParkingMutex,
+
+        pub fn release(self: Held) void {
+            const state = @atomicRmw(usize, &self.mutex.state, .Sub, MUTEX_LOCK, .Release);
+            if ((state & QUEUE_LOCK) == 0 and (state & QUEUE_MASK) != 0)
+                self.mutex.releaseSlow(state);
+        }
+    };
+
+    fn releaseSlow(self: *@This(), current_state: usize) void {
+        @setCold(true);
+        var state = current_state;
+        while (true) {
+            if ((state & QUEUE_LOCK) != 0 or (state & QUEUE_MASK) == 0)
+                return;
+            state = @cmpxchgWeak(usize, &self.state, state, state | QUEUE_LOCK, .Acquire, .Monotonic) orelse break;
+        }
+
+        while (true) : (yield()) {
+            if ((state & MUTEX_LOCK) != 0) {
+                state = @cmpxchgWeak(usize, &self.state, state, state & ~QUEUE_LOCK, .Release, .Acquire) orelse return;
+            } else {
+                const node = @intToPtr(*Node, state & QUEUE_MASK);
+                const new_state = @ptrToInt(node.next);
+                state = @cmpxchgWeak(usize, &self.state, state, new_state, .Release, .Acquire) orelse {
+                    node.event.set();
+                    return;
+                };
+            }
+        }
+    }
+};
+
 /// Lock may be held only once. If the same thread
 /// tries to acquire the same mutex twice, it deadlocks.
 /// This type supports static initialization and is based off of Webkit's WTF Lock (via rust parking_lot)
 /// https://github.com/Amanieu/parking_lot/blob/master/core/src/word_lock.rs
 /// When an application is built in single threaded release mode, all the functions are
 /// no-ops. In single threaded debug mode, there is deadlock detection.
-pub const Mutex = if (builtin.single_threaded)
-    struct {
-        lock: @TypeOf(lock_init),
+pub const Mutex = struct {
+    state: usize,
 
-        const lock_init = if (std.debug.runtime_safety) false else {};
+    const MUTEX_LOCK: usize = 1;
+    const QUEUE_LOCK: usize = 2;
+    const QUEUE_MASK: usize = ~(MUTEX_LOCK | QUEUE_LOCK);
 
-        pub const Held = struct {
-            mutex: *Mutex,
-
-            pub fn release(self: Held) void {
-                if (std.debug.runtime_safety) {
-                    self.mutex.lock = false;
-                }
-            }
-        };
-        pub fn init() Mutex {
-            return Mutex{ .lock = lock_init };
-        }
-        pub fn deinit(self: *Mutex) void {}
-
-        pub fn acquire(self: *Mutex) Held {
-            if (std.debug.runtime_safety and self.lock) {
-                @panic("deadlock detected");
-            }
-            return Held{ .mutex = self };
-        }
+    fn yield() void {
+        std.os.sched_yield() catch std.SpinLock.yield(30);
     }
-else
-    struct {
-        state: usize,
 
-        const MUTEX_LOCK: usize = 1;
-        const QUEUE_LOCK: usize = 2;
-        const QUEUE_MASK: usize = ~(MUTEX_LOCK | QUEUE_LOCK);
+    const Node = struct {
+        next: ?*Node,
+        event: ResetEvent,
+    };
 
-        fn yield() void {
-            if (comptime std.Target.current.isWindows()) {
-                std.SpinLock.yield(404);
-            } else {
-                std.os.sched_yield() catch std.SpinLock.yield(30);
-            }
-        }
-
-        const Node = struct {
-            next: ?*Node,
-            event: ResetEvent,
+    pub fn init() Mutex {
+        return Mutex{
+            .state = 0
         };
+    }
 
-        pub fn init() Mutex {
-            return Mutex{
-                .state = 0
-            };
-        }
-    
-        pub fn deinit(self: *Mutex) void {
-            self.* = undefined;
-        }
-    
-        pub fn acquire(self: *Mutex) Held {
-            if (@cmpxchgWeak(usize, &self.state, 0, MUTEX_LOCK, .Acquire, .Monotonic)) |current|
-                self.acquireSlow(current);
-            return Held{ .mutex = self };
-        }
+    pub fn deinit(self: *Mutex) void {
+        self.* = undefined;
+    }
 
-        fn acquireSlow(self: *Mutex, current_state: usize) void {
-            @setCold(true);
-            while (true) {
-                var state = current_state;
-                var spin_count: usize = 0;
-                while (spin_count < 40) : (spin_count += 1) {
-                    if ((state & MUTEX_LOCK) == 0) {
-                        state = @cmpxchgWeak(usize, &self.state, state, state | MUTEX_LOCK, .Acquire, .Monotonic) orelse return;
-                        std.SpinLock.yield(1);
-                    } else if ((state & QUEUE_MASK) != 0) {
-                        break;
-                    } else {
-                        yield();
-                        state = @atomicLoad(usize, &self.state, .Monotonic);
-                    }
-                }
+    pub fn acquire(self: *Mutex) Held {
+        if (@cmpxchgWeak(usize, &self.state, 0, MUTEX_LOCK, .Acquire, .Monotonic)) |current|
+            self.acquireSlow(current);
+        return Held{ .mutex = self };
+    }
 
-                var node: Node = undefined;
-                node.event = ResetEvent.init();
-                defer node.event.deinit();
-
-                while (true) : (std.SpinLock.yield(1)) {
-                    if ((state & MUTEX_LOCK) == 0) {
-                        state = @cmpxchgWeak(usize, &self.state, state, state | MUTEX_LOCK, .Acquire, .Monotonic) orelse return;
-                    } else {
-                        node.next = @intToPtr(?*Node, state & QUEUE_MASK);
-                        const new_state = @ptrToInt(&node) | (state & ~QUEUE_MASK);
-                        state = @cmpxchgWeak(usize, &self.state, state, new_state, .Release, .Monotonic) orelse {
-                            node.event.wait();
-                            break;
-                        };
-                    }
-                }
-            }
-        }
-    
-        pub const Held = struct {
-            mutex: *Mutex,
-    
-            pub fn release(self: Held) void {
-                const state = @atomicRmw(usize, &self.mutex.state, .Sub, MUTEX_LOCK, .Release);
-                if ((state & QUEUE_LOCK) == 0 and (state & QUEUE_MASK) != 0)
-                    self.mutex.releaseSlow(state);
-            }
-        };
-
-        fn releaseSlow(self: *Mutex, current_state: usize) void {
-            @setCold(true);
+    fn acquireSlow(self: *Mutex, current_state: usize) void {
+        @setCold(true);
+        while (true) {
             var state = current_state;
-            while (true) : (std.SpinLock.yield(1)) {
-                if ((state & QUEUE_LOCK) != 0 or (state & QUEUE_MASK) == 0)
-                    return;
-                state = @cmpxchgWeak(usize, &self.state, state, state | QUEUE_LOCK, .Acquire, .Monotonic) orelse break;
+            var spin_count: u23 = 40;
+            while (spin_count != 0) : (spin_count -= 1) {
+                if ((state & MUTEX_LOCK) == 0) {
+                    state = @cmpxchgWeak(usize, &self.state, state, state | MUTEX_LOCK, .Acquire, .Monotonic) orelse return;
+                    // std.SpinLock.yield(1);
+                } else if ((state & QUEUE_MASK) != 0) {
+                    break;
+                } else {
+                    yield();
+                    state = @atomicLoad(usize, &self.state, .Monotonic);
+                }
             }
 
-            while (true) : (yield()) {
-                if ((state & MUTEX_LOCK) != 0) {
-                    state = @cmpxchgWeak(usize, &self.state, state, state & ~QUEUE_LOCK, .Release, .Acquire) orelse return;
+            var node: Node = undefined;
+            node.event = ResetEvent.init();
+            defer node.event.deinit();
+
+            while (true) : (std.SpinLock.yield(1)) {
+                if ((state & MUTEX_LOCK) == 0) {
+                    state = @cmpxchgWeak(usize, &self.state, state, state | MUTEX_LOCK, .Acquire, .Monotonic) orelse return;
                 } else {
-                    const node = @intToPtr(*Node, state & QUEUE_MASK);
-                    const new_state = @ptrToInt(node.next);
-                    state = @cmpxchgWeak(usize, &self.state, state, new_state, .Release, .Acquire) orelse {
-                        node.event.set();
-                        return;
+                    node.next = @intToPtr(?*Node, state & QUEUE_MASK);
+                    const new_state = @ptrToInt(&node) | (state & ~QUEUE_MASK);
+                    state = @cmpxchgWeak(usize, &self.state, state, new_state, .Release, .Monotonic) orelse {
+                        node.event.wait();
+                        break;
                     };
                 }
             }
         }
+    }
+
+    pub const Held = struct {
+        mutex: *Mutex,
+
+        pub fn release(self: Held) void {
+            const state = @atomicRmw(usize, &self.mutex.state, .Sub, MUTEX_LOCK, .Release);
+            if ((state & QUEUE_LOCK) == 0 and (state & QUEUE_MASK) != 0)
+                self.mutex.releaseSlow(state);
+        }
     };
+
+    fn releaseSlow(self: *Mutex, current_state: usize) void {
+        @setCold(true);
+        var state = current_state;
+        while (true) {
+            if ((state & QUEUE_LOCK) != 0 or (state & QUEUE_MASK) == 0)
+                return;
+            state = @cmpxchgWeak(usize, &self.state, state, state | QUEUE_LOCK, .Acquire, .Monotonic) orelse break;
+        }
+
+        while (true) : (yield()) {
+            if ((state & MUTEX_LOCK) != 0) {
+                state = @cmpxchgWeak(usize, &self.state, state, state & ~QUEUE_LOCK, .Release, .Acquire) orelse return;
+            } else {
+                const node = @intToPtr(*Node, state & QUEUE_MASK);
+                const new_state = @ptrToInt(node.next);
+                state = @cmpxchgWeak(usize, &self.state, state, new_state, .Release, .Acquire) orelse {
+                    node.event.set();
+                    return;
+                };
+            }
+        }
+    }
+};
 
 const TestContext = struct {
     mutex: *Mutex,
