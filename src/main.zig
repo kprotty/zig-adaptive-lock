@@ -1,57 +1,21 @@
 const std = @import("std");
-const Standard = SrwLock; // StdMutex;
-const CustomMutex = @import("./lock.zig").Mutex; // @import("./mutex.zig").Mutex;
-
-const SrwLock = struct {
-    data: [2]usize,
-
-    pub fn init() @This() {
-        return @This(){ .data = .{0, 0} };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        self.* = undefined;
-    }
-
-    pub fn acquire(self: *@This()) Held {
-        AcquireSRWLockExclusive(@ptrToInt(self));
-        return Held{ .mutex = self };
-    }
-
-    pub const Held = struct {
-        mutex: *SrwLock,
-
-        pub fn release(self: Held) void {
-            ReleaseSRWLockExclusive(@ptrToInt(self.mutex));
-        }
-    };
-
-    extern "kernel32" stdcallcc fn AcquireSRWLockExclusive(ptr: usize) void;
-    extern "kernel32" stdcallcc fn ReleaseSRWLockExclusive(ptr: usize) void;
-};
+const Standard = StdMutex;
+const CustomMutex = @import("./linux.zig").Mutex; // @import("./mutex.zig").Mutex;
 
 const StdMutex = struct {
     lock: u32,
 
     pub fn init() @This() {
-        return @This(){ .lock = 1 };
+        return @This(){ .lock = 0 };
     }
 
     pub fn deinit(self: *@This()) void {
         self.* = undefined;
     }
 
-    fn yield() void {
-        if (comptime std.Target.current.isWindows()) {
-            std.SpinLock.yield(500);
-        } else {
-            std.os.sched_yield() catch std.SpinLock.yield(30);
-        }
-    }
-
     pub fn acquire(self: *@This()) Held {
-        while (@atomicRmw(u32, &self.lock, .Xchg, 0, .Acquire) == 0) {
-            yield();
+        while (@atomicRmw(u32, &self.lock, .Xchg, 1, .Acquire) != 0) {
+            std.os.sched_yield() catch unreachable;
         }
         return Held{ .mutex = self };
     }
@@ -60,7 +24,7 @@ const StdMutex = struct {
         mutex: *StdMutex,
 
         pub fn release(self: Held) void {
-            @atomicStore(u32, &self.mutex.lock, 1, .Release);
+            @atomicStore(u32, &self.mutex.lock, 0, .Release);
         }
     };
 };

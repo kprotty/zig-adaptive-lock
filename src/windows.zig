@@ -91,3 +91,31 @@ pub const Mutex = struct {
         }
     }
 };
+
+pub const SrwLock = struct {
+    data: [2]usize,
+
+    pub fn init() @This() {
+        return @This(){ .data = .{0, 0} };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        self.* = undefined;
+    }
+
+    pub fn acquire(self: *@This()) Held {
+        AcquireSRWLockExclusive(@ptrToInt(self));
+        return Held{ .mutex = self };
+    }
+
+    pub const Held = struct {
+        mutex: *SrwLock,
+
+        pub fn release(self: Held) void {
+            ReleaseSRWLockExclusive(@ptrToInt(self.mutex));
+        }
+    };
+
+    extern "kernel32" stdcallcc fn AcquireSRWLockExclusive(ptr: usize) void;
+    extern "kernel32" stdcallcc fn ReleaseSRWLockExclusive(ptr: usize) void;
+};
