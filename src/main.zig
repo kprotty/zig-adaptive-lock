@@ -1,5 +1,5 @@
 const std = @import("std");
-const Standard = StdMutex; // @import("./mutex.zig").Mutex;
+const Standard = @import("./mutex.zig").Mutex;
 const CustomMutex = @import("./mutex.zig").ParkingMutex;
 
 const StdMutex = struct {

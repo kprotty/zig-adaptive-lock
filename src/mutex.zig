@@ -19,31 +19,37 @@ pub const ParkingMutex = struct {
         event: ResetEvent,
     };
 
-    pub fn init() @This() {
-        return @This(){
+    pub fn init() ParkingMutex {
+        return ParkingMutex{
             .state = 0
         };
     }
 
-    pub fn deinit(self: *@This()) void {
+    pub fn deinit(self: *ParkingMutex) void {
         self.* = undefined;
     }
 
-    pub fn acquire(self: *@This()) Held {
+    pub fn acquire(self: *ParkingMutex) Held {
         if (@cmpxchgWeak(usize, &self.state, 0, MUTEX_LOCK, .Acquire, .Monotonic)) |current|
             self.acquireSlow(current);
         return Held{ .mutex = self };
     }
 
-    fn acquireSlow(self: *@This(), current_state: usize) void {
+    threadlocal var this_node = Node{
+        .next = undefined,
+        .event = ResetEvent.init(),
+    };
+
+    fn acquireSlow(self: *ParkingMutex, current_state: usize) void {
         @setCold(true);
+
         while (true) {
             var state = current_state;
-            var spin_count: u23 = 40;
+            var spin_count: u32 = 40;
             while (spin_count != 0) : (spin_count -= 1) {
                 if ((state & MUTEX_LOCK) == 0) {
                     state = @cmpxchgWeak(usize, &self.state, state, state | MUTEX_LOCK, .Acquire, .Monotonic) orelse return;
-                    std.SpinLock.yield(1);
+                    // std.SpinLock.yield(1);
                 } else if ((state & QUEUE_MASK) != 0) {
                     break;
                 } else {
@@ -52,18 +58,15 @@ pub const ParkingMutex = struct {
                 }
             }
 
-            var node: Node = undefined;
-            node.event = ResetEvent.init();
-            defer node.event.deinit();
-
             while (true) : (std.SpinLock.yield(1)) {
                 if ((state & MUTEX_LOCK) == 0) {
                     state = @cmpxchgWeak(usize, &self.state, state, state | MUTEX_LOCK, .Acquire, .Monotonic) orelse return;
                 } else {
-                    node.next = @intToPtr(?*Node, state & QUEUE_MASK);
-                    const new_state = @ptrToInt(&node) | (state & ~QUEUE_MASK);
+                    this_node.next = @intToPtr(?*Node, state & QUEUE_MASK);
+                    const new_state = @ptrToInt(&this_node) | (state & ~QUEUE_MASK);
                     state = @cmpxchgWeak(usize, &self.state, state, new_state, .Release, .Monotonic) orelse {
-                        node.event.wait();
+                        this_node.event.wait();
+                        this_node.event.reset();
                         break;
                     };
                 }
@@ -81,7 +84,7 @@ pub const ParkingMutex = struct {
         }
     };
 
-    fn releaseSlow(self: *@This(), current_state: usize) void {
+    fn releaseSlow(self: *ParkingMutex, current_state: usize) void {
         @setCold(true);
         var state = current_state;
         while (true) {
@@ -147,7 +150,7 @@ pub const Mutex = struct {
         @setCold(true);
         while (true) {
             var state = current_state;
-            var spin_count: u23 = 40;
+            var spin_count: u32 = 40;
             while (spin_count != 0) : (spin_count -= 1) {
                 if ((state & MUTEX_LOCK) == 0) {
                     state = @cmpxchgWeak(usize, &self.state, state, state | MUTEX_LOCK, .Acquire, .Monotonic) orelse return;
