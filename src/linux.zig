@@ -88,7 +88,7 @@ pub const _Mutex = extern union {
             std.os.sched_yield() catch unreachable;
         }
 
-        var waiting = @atomicLoad()
+        var waiting = @atomicLoad();
     }
 
     pub const Held = struct {
