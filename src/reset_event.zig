@@ -129,13 +129,15 @@ const PosixEvent = struct {
         self.is_set = false;
     }
 
+    extern "c" fn pthread_cond_broadcast(c: *c.pthread_cond_t) c_int;
+
     fn set(self: *PosixEvent) void {
         assert(c.pthread_mutex_lock(&self.mutex) == 0);
         defer assert(c.pthread_mutex_unlock(&self.mutex) == 0);
 
         if (!self.is_set) {
             self.is_set = true;
-            assert(c.pthread_cond_broadcast(&self.cond) == 0);
+            assert(pthread_cond_broadcast(&self.cond) == 0);
         }
     }
 
