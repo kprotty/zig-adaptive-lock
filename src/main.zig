@@ -1,6 +1,6 @@
 const std = @import("std");
-const Standard = std.Mutex;
-const CustomMutex = @import("./mutex.zig").Mutex;
+const Standard = std.Mutex; //@import("./windows.zig").SrwLock;
+const CustomMutex = @import("./windows.zig").NewMutex;
 
 const StdMutex = struct {
     lock: u32,
@@ -68,7 +68,7 @@ fn bench(threads: []*std.Thread, comptime iters: u128, comptime Mutex: type) !u6
                 defer held.release();
                 if (self.value == iters)
                     return;
-                //var x: usize = undefined; for (@as([10]u8, undefined)) |_| _ = @atomicRmw(usize, &x, .Xchg, 1, .SeqCst);
+                var x: usize = undefined; for (@as([5]u8, undefined)) |_| _ = @atomicRmw(usize, &x, .Xchg, 1, .SeqCst);
                 const is_done = self.value == iters - 1;
                 self.value += 1;
                 if (is_done) {
