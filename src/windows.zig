@@ -1,7 +1,7 @@
 const std = @import("std");
 const windows = std.os.windows;
 
-const SPIN = 40;
+const SPIN = 0;
 const IS_FAIR = true;
 
 pub const NewMutex = struct {
