@@ -16,7 +16,13 @@ pub const Mutex = struct {
         self.* = undefined;
     }
 
-    pub fn acquire(self: *Mutex) Held {
+    pub fn locked(self: *Mutex, critical_section: var) void {
+        self.acquire();
+        critical_section.run();
+        self.release();
+    }
+
+    fn acquire(self: *Mutex) void {
         var spin: usize = 0;
         while (true) {
             const state = @atomicLoad(State, &self.state, .Monotonic);
@@ -39,11 +45,7 @@ pub const Mutex = struct {
         }
     }
 
-    pub const Held = struct {
-        mutex: *Mutex,
-
-        pub fn release(self: Held) void {
-            @atomicStore(State, &self.mutex.state, .Unlocked, .Release);
-        }
-    };
+    fn release(self: *Mutex) void {
+        @atomicStore(State, &self.mutex.state, .Unlocked, .Release);
+    }
 };
