@@ -218,8 +218,10 @@ fn benchThroughput(ctx: BenchContext, comptime Mutex: type) !void {
     });
 
     defer results.deinit();
-    for (results.items) |*result|
+    for (results.items) |*result| {
         result.iterations /= 1000;
+        result.iterations /= ctx.measure_seconds;
+    }
 
     const average = blk: {
         var avg: f64 = 0;
@@ -403,20 +405,17 @@ fn parse(arg: var, args: var, array: var, comptime parseFn: var, comptime ranges
                 while (start <= end) : (start += 1) {
                     try array.append(start);
                 }
+                if (len + 1 >= value.len)
+                    break;
                 value = value[len + 1..];
                 continue;
             }
         }
-        if (indexOf(u8, value, ",")) |idx| {
-            const len = blk: {
-                if (indexOf(u8, value[idx + 1..], ",")) |i| {
-                    break :blk (idx + 1 + i);
-                } else {
-                    break :blk value.len;
-                }
-            };
+        if (indexOf(u8, value, ",")) |len| {
             const item = try parseFn(value[0..len]);
             try array.append(item);
+            if (len + 1 >= value.len)
+                break;
             value = value[len + 1..];
             continue;
         }
