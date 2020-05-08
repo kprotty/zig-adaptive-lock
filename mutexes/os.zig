@@ -26,25 +26,25 @@ pub const Mutex = switch (std.builtin.os.tag) {
         }
     },
     else => struct {
-        pub const NAME = "pthread_mutex_t";
+        // pub const NAME = "pthread_mutex_t";
 
-        inner: std.c.pthread_mutex_t,
+        // inner: std.c.pthread_mutex_t,
 
-        pub fn init() Mutex {
-            return Mutex{ .inner = std.c.PTHREAD_MUTEX_INITIALIZER };
-        }
+        // pub fn init() Mutex {
+        //     return Mutex{ .inner = std.c.PTHREAD_MUTEX_INITIALIZER };
+        // }
 
-        pub fn deinit(self: *Mutex) void {
-            _ = std.c.pthread_mutex_destroy(&self.inner);
-            self.* = undefined;
-        }
+        // pub fn deinit(self: *Mutex) void {
+        //     _ = std.c.pthread_mutex_destroy(&self.inner);
+        //     self.* = undefined;
+        // }
 
-        pub fn acquire(self: *Mutex) void {
-            _ = std.c.pthread_mutex_lock(&self.inner);
-        }
+        // pub fn acquire(self: *Mutex) void {
+        //     _ = std.c.pthread_mutex_lock(&self.inner);
+        // }
 
-        pub fn release(self: *Mutex) void {
-            _ = std.c.pthread_mutex_unlock(&self.inner);
-        }
+        // pub fn release(self: *Mutex) void {
+        //     _ = std.c.pthread_mutex_unlock(&self.inner);
+        // }
     },
 };
