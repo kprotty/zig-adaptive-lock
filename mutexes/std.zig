@@ -1,6 +1,8 @@
 const std = @import("std");
 
 pub const Mutex = struct {
+    pub const NAME = "std.Mutex";
+
     inner: std.Mutex,
 
     pub fn init() Mutex {
@@ -11,9 +13,12 @@ pub const Mutex = struct {
         self.inner.deinit();
     }
 
-    pub fn locked(self: *Mutex, critical_section: var) void {
-        const held = self.inner.acquire();
-        critical_section.run();
+    pub fn acquire(self: *Mutex) void {
+        _ = self.inner.acquire();
+    }
+
+    pub fn release(self: *Mutex) void {
+        const held = std.Mutex.Held{ .mutex = &self.inner };
         held.release();
     }
 };

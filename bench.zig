@@ -12,7 +12,7 @@ fn benchMutexes(ctx: BenchContext) !void {
 }
 
 fn help() void {
-    std.debug.warn(
+    std.debug.warn("{}\n", .{
         \\\Usage: zig run bench.zig [command] [options]
         \\\
         \\\Commands:
@@ -23,9 +23,9 @@ fn help() void {
         \\\Options:
         \\\ -m/measure [seconds]        Amount of seconds to measure each mutex during the benchmark
         \\\ -t/threads [num]/[from-to]  CSV list of single/range thread counts to use when benchmarking
-        \\\ -l/locked [time][units]     CSV list of time to spend inside the critical section on each iteration (rounded to microseconds)
-        \\\ -u/unlocked [time][units]   CSV list of time to spend outside the critical section on each iteration (rounded to microseconds)
-    );
+        \\\ -l/locked [time][units]     CSV list of time to spend inside the critical section on each iteration as est. nanoseconds
+        \\\ -u/unlocked [time][units]   CSV list of time to spend outside the critical section on each iteration as est. nanoseconds
+    });
 }
 
 const BenchContext = struct {
@@ -38,6 +38,8 @@ const BenchContext = struct {
     work_locked: u64,
     work_unlocked: u64,
     measure_seconds: u64,
+    loads_per_ns: u64,
+    timer_overhead: u64,
 };
 
 pub fn main() !void {
@@ -66,14 +68,13 @@ pub fn main() !void {
 
     while (args.next(allocator)) |a| {
         const arg = try a;
-         {
-            const list = blk: {
-                if (indexOf(u8, arg, "=")) |idx| {
-                    break :blk arg[idx+1..];
-                } else {
-                    break :blk (args.next(allocator) orelse return help()) catch return help();
-                }
-            };
+        const list = blk: {
+            if (indexOf(u8, arg, "=")) |idx| {
+                break :blk arg[idx+1..];
+            } else {
+                break :blk (args.next(allocator) orelse return help()) catch return help();
+            }
+        };
         if (startsWith(u8, arg, "-m") or startsWith(u8, arg, "-measure") or startsWith(u8, arg, "--measure")) {
             const seconds_str = blk: {
                 if (indexOf(u8, arg, "=")) |idx| {
@@ -82,24 +83,24 @@ pub fn main() !void {
                     break :blk (args.next(allocator) orelse return help()) catch return help();
                 }
             };
-            ctx.measure_seconds = std.fmt.parseInt(u64, seconds_ptr, 10) catch @panic("Expected seconds for measure time");
+            ctx.measure_seconds = std.fmt.parseInt(u64, seconds_str, 10) catch @panic("Expected seconds for measure time");
+            ctx.measure_seconds = std.math.max(ctx.measure_seconds, 1);
         } else if (startsWith(u8, arg, "-t") or startsWith(u8, arg, "-threads") or startsWith(u8, arg, "--threads")) {
             try parse(arg, &args, &threads, parseInt, true);
         } else if (startsWith(u8, arg, "-l") or startsWith(u8, arg, "-locked") or startsWith(u8, arg, "--locked")) {
             try parse(arg, &args, &locked, parseWorkUnit, false);
         } else if (startsWith(u8, arg, "-u") or startsWith(u8, arg, "-unlocked") or startsWith(u8, arg, "--unlocked")) {
-            try parse(arg, &args, &locked, parseWorkUnit, false);
+            try parse(arg, &args, &unlocked, parseWorkUnit, false);
         } else {
-            std.debug.panic("Unknown argument: {}\n", arg);
+            std.debug.panic("Unknown argument: {}\n", .{arg});
         }
     }
     
     if (locked.items.len == 0) {
         try locked.append(1 * std.time.microsecond);
     }
-
     if (unlocked.items.len == 0) {
-        try locked.append(0 * std.time.microsecond);
+        try unlocked.append(0 * std.time.microsecond);
     }
 
     if (threads.items.len == 0) {
@@ -120,12 +121,31 @@ pub fn main() !void {
         }
         var low: usize = 0;
         var high: usize = threads.items.len - 1;
-        while (low < high) : ({ low += 1; high -= 1 }) {
+        while (low < high) : ({ low += 1; high -= 1; }) {
             const temp = threads.items[low];
             threads.items[low] = threads.items[high];
             threads.items[high] = temp;
         }
     }
+
+    var timer = try std.time.Timer.start();
+    ctx.timer_overhead = blk: {
+        const start = timer.read();
+        _ = timer.read();
+        const end = timer.read();
+        break :blk (end - start);
+    };
+
+    const NUM_LOADS = 1000;
+    ctx.loads_per_ns = blk: {
+        var value: usize = undefined;
+        const start = timer.read();
+        for (@as([NUM_LOADS]void, undefined)) |_|
+            _ = @ptrCast(*volatile usize, &value).*;
+        const end = timer.read();
+        const loads = (end - start) - ctx.timer_overhead;
+        break :blk std.math.max(loads / NUM_LOADS, 1);
+    };
 
     for (locked.items) |work_locked| {
         for (unlocked.items) |work_unlocked| {
@@ -139,31 +159,194 @@ pub fn main() !void {
                 std.debug.warn("threads={} time_locked={}{} time_unlocked={}{}\n", .{
                     num_threads,
                     locked_time.value,
-                    locked_time.units,
+                    locked_time.unit,
                     unlocked_time.value,
-                    unlocked_time.units,
+                    unlocked_time.unit,
                 });
+                
+                switch (ctx.mode) {
+                    .Throughput => std.debug.warn(
+                        "{: ^20} | {: ^16} | {: ^16}",
+                        .{"mutex", "avg acq/s", "std.dev acq/s"},
+                    ),
+                    .Latency => {},
+                    .Fairness => {},
+                }
+
                 try benchMutexes(ctx);
             }
         }
     }
 }
 
-fn getTimeUnit(microseconds: )
+fn bench(ctx: BenchContext, comptime Mutex: type) !void {
+    switch (ctx.mode) {
+        .Throughput => try benchThroughput(ctx, Mutex),
+        .Latency => try benchLatency(ctx, Mutex),
+        .Fairness => try benchFairness(ctx, Mutex),
+    }
+}
+
+fn benchThroughput(ctx: BenchContext, comptime Mutex: type) !void {
+    var results = try runBench(ctx, Mutex, struct {
+        const Self = @This();
+        iterations: usize,
+
+        fn init(self: *Self) void {
+            self.iterations = 0;
+        }
+
+        fn after_release(self: *Self) void {
+            self.iterations += 1;
+        }
+    });
+    defer results.deinit();
+
+    var average: f64 = 0;
+    for (results.items) |result|
+        average += @intToFloat(f64, result.iterations);
+    average /= @intToFloat(f64, results.items.len);
+
+    var variance: f64 = 0;
+    for (results.items) |result| {
+        const r = @intToFloat(f64, result.iterations) - average;
+        variance += r * r;
+    }
+    variance /= @intToFloat(f64, results.items.len);
+
+    std.debug.warn(
+        "{: ^20} | {d: ^16.2} | {d: ^16.2}",
+        .{Mutex.NAME, average, variance},
+    );
+}
+
+fn benchLatency(ctx: BenchContext, comptime Mutex: type) !void {
+    return error.NotImplementedYet;
+}
+
+fn benchFairness(ctx: BenchContext, comptime Mutex: type) !void {
+    return error.NotImplementedYet;
+}
+
+fn runBench(ctx: BenchContext, comptime Mutex: type, comptime WorkerContext: type) !std.ArrayList(WorkerContext) {
+    const Context = struct {
+        const Self = @This();
+
+        mutex: Mutex align(128) = undefined,
+        ctx: BenchContext,
+        event: std.ResetEvent = undefined,
+        contexes: std.ArrayList(WorkerContext) = undefined,
+        stop: bool = false,
+
+        const RunContext = struct {
+            self: *Self,
+            worker_context: *WorkerContext,
+        };
+
+        fn run(self: *Self) !void {
+            self.mutex = Mutex.init();
+            defer self.mutex.deinit();
+            
+            self.event = std.ResetEvent.init();
+            defer self.event.deinit();
+
+            const threads = try allocator.alloc(*std.Thread, self.ctx.num_threads);
+            defer allocator.free(threads);
+
+            self.contexes = std.ArrayList(WorkerContext).init(allocator);
+            errdefer self.contexes.deinit();
+
+            for (threads) |*t, i|
+                t.* = try std.Thread.spawn(RunContext{
+                    .self = self,
+                    .worker_context = &self.contexes.items[i],
+                }, worker);
+            self.event.set();
+            std.time.sleep(self.ctx.measure_seconds * std.time.second);
+            @atomicStore(bool, &self.stop, true, .Monotonic);
+            for (threads) |t|
+                t.wait();
+        }
+
+        fn work(loads: usize) void {
+            var i = loads;
+            var value: usize = undefined;
+            while (i != 0) : (i -= 1) {
+                _ = @ptrCast(*volatile usize, &value).*;
+            }
+        }
+
+        fn worker(c: RunContext) void {
+            const self = c.self;
+            const worker_context = c.worker_context;
+
+            self.event.wait();
+            const loads_with_lock = self.ctx.work_locked * self.ctx.loads_per_ns;
+            const loads_without_lock = self.ctx.work_unlocked * self.ctx.loads_per_ns;
+            if (@hasDecl(WorkerContext, "init"))
+                worker_context.init();
+
+            while (@atomicLoad(bool, &self.stop, .Monotonic)) {
+                if (@hasDecl(WorkerContext, "before_acquire"))
+                    worker_context.before_acquire();
+                self.mutex.acquire();
+                if (@hasDecl(WorkerContext, "after_acquire"))
+                    worker_context.after_acquire();
+
+                work(loads_with_lock);
+
+                if (@hasDecl(WorkerContext, "before_release"))
+                    worker_context.before_release();
+                self.mutex.release();
+                if (@hasDecl(WorkerContext, "before_acquire"))
+                    worker_context.after_release();
+
+                work(loads_without_lock);
+            }
+        }
+    };
+    
+    var context = Context{ .ctx = ctx };
+    try context.run();
+    return context.contexes;
+}
+
+const TimeUnit = struct {
+    value: u64,
+    unit: []const u8,
+};
+
+fn getTimeUnit(ns: u64) TimeUnit {
+    var tu: TimeUnit = undefined;
+    if (ns < std.time.microsecond) {
+        tu.unit = "ns";
+        tu.value = ns;
+    } else if (ns < std.time.millisecond) {
+        tu.unit = "us";
+        tu.value = ns / std.time.microsecond;
+    } else if (ns < std.time.second) {
+        tu.unit = "ms";
+        tu.value = ns / std.time.millisecond;
+    } else {
+        tu.unit = "s";
+        tu.value = ns / std.time.second;
+    }
+    return tu;
+}
 
 fn parseInt(buf: []const u8) !usize {
     return std.fmt.parseInt(usize, buf, 10) catch return error.ExpectedInteger;
 }
 
 fn parseWorkUnit(buf: []const u8) !u64 {
-    var end = indexOf(u8, buf, "s") orelse return error.ExpectedTimeUnitInSeconds;
+    var end = indexOf(u8, buf, "s") orelse return error.UnexpectedTimeUnit;
     const unit: u64 = switch (buf[end - 1]) {
-        'n' => b: { end -=1; break :b std.time.nanosecond },
-        'u' => b: { end -=1; break :b std.time.microsecond },
-        'm' => b: { end -=1; break :b std.time.millisecond },
+        'n' => b: { end -=1; break :b std.time.nanosecond; },
+        'u' => b: { end -=1; break :b std.time.microsecond; },
+        'm' => b: { end -=1; break :b std.time.millisecond; },
         else => std.time.second,
     };
-    const time = std.fmt.parseInt(u64, buf, buf[0..end]) catch return error.ExpectedTimeValue;
+    const time = std.fmt.parseInt(u64, buf[0..end], 10) catch return error.ExpectedTimeValue;
     return time * unit;
 }
 
@@ -208,64 +391,8 @@ fn parse(arg: var, args: var, array: var, comptime parseFn: var, comptime ranges
             value = value[len + 1..];
             continue;
         }
-        const item = try parse(value);
+        const item = try parseFn(value);
         try array.append(item);
         break;
     }
-}
-
-fn bench(ctx: BenchContext, comptime Mutex: type) !void {
-    switch (ctx.mode) {
-        .Throughput => try benchThroughput(ctx, Mutex),
-        .Latency => try benchLatency(ctx, Mutex),
-        .Fairness => try benchFairness(ctx, Mutex),
-    }
-}
-
-fn benchThroughput(ctx: BenchContext, comptime Mutex: type) !void {
-    const Context = struct {
-        const Self = @This();
-
-        mutex: Mutex align(256) = undefined,
-        ctx: BenchContext,
-        event: std.ResetEvent = undefined,
-        iters: usize = 0,
-        stop: usize = 0,
-
-        fn run(self: *Self) !void {
-            self.mutex = Mutex.init();
-            defer self.mutex.deinit();
-            
-            self.event = std.ResetEvent.init();
-            defer self.event.deinit();
-
-            const threads = try allocator.alloc(*std.Thread, self.ctx.num_threads);
-            defer allocator.free(threads);
-
-            for (threads) |*t| t.* = try std.Thread.spawn(self, worker);
-            self.event.set();
-            std.time.sleep(ctx.measure_seconds * std.time.second);
-            @atomicStore(usize, &self.stop, 1, .Monotonic);
-            for (threads) |t| t.wait();
-
-
-        }
-
-        fn worker(self: *Self) void {
-            self.event.wait();
-            while (@atomicLoad(usize, &self.stop, .Monotonic) == 0) {
-
-            }
-        }
-    };
-    
-    return Context{ .ctx = ctx }.run();
-}
-
-fn benchLatency(ctx: BenchContext, comptime Mutex: type) !void {
-    return error.NotImplementedYet;
-}
-
-fn benchFairness(ctx: BenchContext, comptime Mutex: type) !void {
-    return error.NotImplementedYet;
 }

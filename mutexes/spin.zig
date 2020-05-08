@@ -1,6 +1,8 @@
 const std = @import("std");
 
 pub const Mutex = struct {
+    pub const NAME = "spin_lock";
+
     const State = enum(usize) {
         Locked,
         Unlocked,
@@ -16,36 +18,27 @@ pub const Mutex = struct {
         self.* = undefined;
     }
 
-    pub fn locked(self: *Mutex, critical_section: var) void {
-        self.acquire();
-        critical_section.run();
-        self.release();
-    }
-
-    fn acquire(self: *Mutex) void {
+    pub fn acquire(self: *Mutex) void {
         var spin: usize = 0;
+        var state: State = .Unlocked;
         while (true) {
-            const state = @atomicLoad(State, &self.state, .Monotonic);
-            if (state == .Unlocked)
-                _ = @cmpxchgWeak(
+            if (state == .Unlocked) {
+                state = @cmpxchgWeak(
                     State,
                     &self.state,
                     .Unlocked,
                     .Locked,
                     .Acquire,
                     .Monotonic,
-                ) orelse return Held{ .mutex = self };
-            if (spin < 1024) {
-                spin <<= 1;
-                std.SpinLock.loopHint(spin);
+                ) orelse return;
             } else {
-                spin +%= 1;
-                std.SpinLock.loopHint(std.math.min(10 * 1024, spin *% 1024));
+                std.SpinLock.loopHint(1);
+                state = @atomicLoad(State, &self.state, .Monotonic);
             }
         }
     }
 
-    fn release(self: *Mutex) void {
-        @atomicStore(State, &self.mutex.state, .Unlocked, .Release);
+    pub fn release(self: *Mutex) void {
+        @atomicStore(State, &self.state, .Unlocked, .Release);
     }
 };
