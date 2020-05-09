@@ -219,8 +219,7 @@ fn benchThroughput(ctx: BenchContext, comptime Mutex: type) !void {
 
     defer results.deinit();
     for (results.items) |*result| {
-        result.iterations /= 1000;
-        result.iterations /= ctx.measure_seconds;
+        result.iterations /= 1000 * ctx.measure_seconds;
     }
 
     const average = blk: {
