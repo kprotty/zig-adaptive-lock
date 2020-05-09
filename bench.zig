@@ -153,21 +153,21 @@ pub fn main() !void {
     var timer = try std.time.Timer.start();
     ctx.timer_overhead = blk: {
         const start = timer.read();
-        _ = timer.read();
+        var result: u64 = undefined;
+        @ptrCast(*volatile u64, &result).* = timer.read();
         const end = timer.read();
         break :blk (end - start);
     };
 
-    
     ctx.loads_per_ns = blk: {
         const NUM_LOADS = 10000;
         var value: usize = undefined;
         const start = timer.read();
         for (@as([NUM_LOADS]void, undefined)) |_|
-            _ = @ptrCast(*volatile usize, &value).*;
+            value = @ptrCast(*volatile usize, &value).*;
         const end = timer.read();
         const loads = (end - start) - ctx.timer_overhead;
-        break :blk std.math.max(loads / NUM_LOADS, 1);
+        break :blk std.math.max(NUM_LOADS / loads, 1);
     };
 
     for (locked.items) |work_locked| {
@@ -302,7 +302,7 @@ fn runBench(ctx: BenchContext, comptime Mutex: type, comptime WorkerContext: typ
             var i = loads;
             var value: usize = undefined;
             while (i != 0) : (i -= 1) {
-                _ = @ptrCast(*volatile usize, &value).*;
+                value = @ptrCast(*volatile usize, &value).*;
             }
         }
 
