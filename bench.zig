@@ -7,9 +7,9 @@ const allocator = if (std.builtin.link_libc) std.heap.c_allocator else std.heap.
 /// Add mutexes to benchmark here
 fn benchMutexes(ctx: BenchContext) !void {
     try bench(ctx, @import("./mutexes/zap.zig").Mutex);
+    try bench(ctx, @import("./mutexes/std.zig").Mutex);
     try bench(ctx, @import("./mutexes/os.zig").Mutex);
     try bench(ctx, @import("./mutexes/spin.zig").Mutex);
-    try bench(ctx, @import("./mutexes/std.zig").Mutex);
 }
 
 fn help() void {
@@ -65,7 +65,7 @@ const BenchContext = struct {
         std.debug.warn("{}\n", .{
             try std.fmt.bufPrint(
                 buffer[0..],
-                "{s:16} | {:12} k | {:12} k",
+                "{s:16} | {:14} | {:14}",
                 args,
             ),
         });
@@ -120,10 +120,10 @@ pub fn main() !void {
     }
     
     if (locked.items.len == 0) {
-        try locked.append(1 * std.time.microsecond);
+        try locked.append(0 * std.time.nanosecond);
     }
     if (unlocked.items.len == 0) {
-        try unlocked.append(0 * std.time.microsecond);
+        try unlocked.append(0 * std.time.nanosecond);
     }
 
     if (threads.items.len == 0) {
@@ -220,7 +220,7 @@ fn benchThroughput(ctx: BenchContext, comptime Mutex: type) !void {
 
     defer results.deinit();
     for (results.items) |*result| {
-        result.iterations /= 1000 * ctx.measure_seconds;
+        result.iterations /= ctx.measure_seconds;
     }
 
     const average = blk: {
