@@ -6,6 +6,7 @@ const allocator = if (std.builtin.link_libc) std.heap.c_allocator else std.heap.
 
 /// Add mutexes to benchmark here
 fn benchMutexes(ctx: BenchContext) !void {
+    try bench(ctx, @import("./mutexes/zap.zig").Mutex);
     try bench(ctx, @import("./mutexes/os.zig").Mutex);
     try bench(ctx, @import("./mutexes/spin.zig").Mutex);
     try bench(ctx, @import("./mutexes/std.zig").Mutex);
@@ -272,7 +273,7 @@ fn runBench(ctx: BenchContext, comptime Mutex: type, comptime WorkerContext: typ
         };
 
         fn run(self: *Self) !void {
-            self.mutex = Mutex.init();
+            self.mutex.init();
             defer self.mutex.deinit();
             
             self.event = std.ResetEvent.init();

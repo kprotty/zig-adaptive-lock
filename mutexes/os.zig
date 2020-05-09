@@ -9,8 +9,8 @@ pub const Mutex = switch (std.builtin.os.tag) {
         extern "kernel32" fn AcquireSRWLockExclusive(ptr: *usize) callconv(.Stdcall) void;
         extern "kernel32" fn ReleaseSRWLockExclusive(ptr: *usize) callconv(.Stdcall) void;
 
-        pub fn init() Mutex {
-            return Mutex{ .inner = 0 };
+        pub fn init(self: *Mutex) void {
+            self.inner = 0;
         }
 
         pub fn deinit(self: *Mutex) void {

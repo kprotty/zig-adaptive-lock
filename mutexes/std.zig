@@ -5,8 +5,8 @@ pub const Mutex = struct {
 
     inner: std.Mutex,
 
-    pub fn init() Mutex {
-        return Mutex{ .inner = std.Mutex.init() };
+    pub fn init(self: *Mutex) void {
+        self.inner = std.Mutex.init();
     }
 
     pub fn deinit(self: *Mutex) void {

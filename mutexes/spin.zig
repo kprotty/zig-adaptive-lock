@@ -10,8 +10,8 @@ pub const Mutex = struct {
 
     state: State,
 
-    pub fn init() Mutex {
-        return Mutex{ .state = .Unlocked };
+    pub fn init(self: *Mutex) void {
+        self.state = .Unlocked;
     }
 
     pub fn deinit(self: *Mutex) void {
