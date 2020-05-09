@@ -46,7 +46,7 @@ pub const OsAutoResetEvent = struct {
     }
 
     pub fn yield(contended: bool, iteration: usize) bool {
-        if (!(contended and iteration < 15))
+        if (contended or iteration > 10)
             return false;
 
         var i = @as(usize, 1) << @intCast(u4, iteration);
