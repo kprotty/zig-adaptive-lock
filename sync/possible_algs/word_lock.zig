@@ -59,19 +59,20 @@ pub fn Lock(comptime AutoResetEvent: type) type {
             );
         }
 
-        pub fn tryAcquire(self: *Self) bool {
+        pub inline fn tryAcquire(self: *Self) bool {
             if (isX86)
                 return self.bitTestAndSet(0);
-            return @atomicRmw(
+            return @cmpxchgStrong(
                 u8,
                 @ptrCast(*u8, &self.state),
-                .Xchg,
+                UNLOCKED,
                 LOCKED,
                 .Acquire,
-            ) == UNLOCKED;
+                .Monotonic,
+            ) == null;
         }
 
-        pub fn acquire(self: *Self) void {
+        pub inline fn acquire(self: *Self) void {
             if (!self.tryAcquire())
                 self.acquireSlow();
         }
@@ -80,75 +81,51 @@ pub fn Lock(comptime AutoResetEvent: type) type {
             @setCold(true);
 
             var has_event = false;
-            var is_waking = false;
             var spin_iter: usize = 0;
             var waiter align(WAIT_ALIGN) = @as(Waiter, undefined);
-            var state = @atomicLoad(usize, &self.state, .Acquire);
+            var state = @atomicLoad(usize, &self.state, .Monotonic);
 
             while (true) {
-                var new_state = state;
-                const head = @intToPtr(?*Waiter, state & WAITING);
-                
                 if (state & LOCKED == 0) {
-                    new_state |= LOCKED;
-                    if (is_waking) {
-                        new_state &= ~@as(usize, WAKING);
-                        @fence(.Acquire);
-                        if (head) |waiter_head| {
-                            if (waiter_head == &waiter) {
-                                new_state &= ~WAITING;
-                            } else {
-                                const tail = waiter_head.findTail();
-                                waiter_head.tail = waiter.prev;
-                            }
-                        }
+                    if (self.tryAcquire()) {
+                        if (has_event)
+                            waiter.event.deinit();
+                        return;
                     }
+                    _ = AutoResetEvent.yield(false, 0);
+                    state = @atomicLoad(usize, &self.state, .Monotonic);
+                    continue;
+                }
 
-                } else if (is_waking) {
-                    new_state &= ~@as(usize, WAKING);
-                    @fence(.Acquire);
-                    if (head) |waiter_head| {
-                        const tail = waiter_head.findTail();
-                        waiter_head.tail = &waiter;
-                    }
+                const head = @intToPtr(?*Waiter, state & WAITING);
+                if (AutoResetEvent.yield(head != null, spin_iter)) {
+                    spin_iter +%= 1;
+                    state = @atomicLoad(usize, &self.state, .Monotonic);
+                    continue;
+                }
 
-                } else {
-                    if (AutoResetEvent.yield(head != null, spin_iter)) {
-                        spin_iter +%= 1;
-                        state = @atomicLoad(usize, &self.state, .Monotonic);
-                        continue;
-                    }
-
-                    waiter.prev = null;
-                    waiter.next = head;
-                    waiter.tail = if (head == null) &waiter else null;
-                    new_state = (new_state & ~WAITING) | @ptrToInt(&waiter);
-                    if (!has_event) {
-                        has_event = true;
-                        waiter.event.init();
-                    }
+                waiter.prev = null;
+                waiter.next = head;
+                waiter.tail = if (head == null) &waiter else null;
+                if (!has_event) {
+                    has_event = true;
+                    waiter.event.init();
                 }
 
                 if (@cmpxchgWeak(
                     usize,
                     &self.state,
                     state,
-                    new_state,
-                    .AcqRel,
+                    (state & ~WAITING) | @ptrToInt(&waiter),
+                    .Release,
                     .Monotonic,
-                )) |updated_state| {
-                    state = updated_state;
+                )) |new_state| {
+                    state = new_state;
                     continue;
                 }
 
-                if (state & LOCKED == 0) {
-                    if (has_event)
-                        waiter.event.deinit();
-                    return;
-                }
-
                 waiter.event.wait();
-                is_waking = true;
+                spin_iter = 0;
                 state = @atomicLoad(usize, &self.state, .Monotonic);
             }
         }
@@ -161,8 +138,7 @@ pub fn Lock(comptime AutoResetEvent: type) type {
                 .Release,
             );
 
-            const ordering = if (isX86) .Acquire else .Monotonic;
-            const state = @atomicLoad(usize, &self.state, ordering);
+            const state = @atomicLoad(usize, &self.state, .Monotonic);
             if ((state & WAITING != 0) and (state & (WAKING | LOCKED) == 0))
                 self.releaseSlow(state);
         }
@@ -184,10 +160,43 @@ pub fn Lock(comptime AutoResetEvent: type) type {
                 ) orelse break;
             }
 
-            const head = @intToPtr(*Waiter, state & WAITING);
-            const tail = head.findTail();
-            @fence(.Release);
-            tail.event.set();
+            dequeue: while (true) {
+                const head = @intToPtr(*Waiter, state & WAITING);
+                const tail = head.findTail();
+
+                if (state & LOCKED != 0) {
+                    state = @cmpxchgWeak(
+                        usize,
+                        &self.state,
+                        state,
+                        state & ~@as(usize, WAKING),
+                        .Release,
+                        .Acquire,
+                    ) orelse return;
+                    continue;
+                }
+
+                if (tail.prev) |new_tail| {
+                    head.tail = new_tail;
+                    _ = @atomicRmw(usize, &self.state, .And, ~@as(usize, WAKING), .Release);
+                } else {
+                    while (true) {
+                        state = @cmpxchgWeak(
+                            usize,
+                            &self.state,
+                            state,
+                            state & LOCKED,
+                            .Release,
+                            .Acquire,
+                        ) orelse break;
+                        if ((state & WAITING) != @ptrToInt(head))
+                            continue :dequeue;
+                    }
+                }
+
+                tail.event.set();
+                return;
+            }
         }
     };
 }
