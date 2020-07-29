@@ -58,7 +58,7 @@ const BenchContext = struct {
         });
     }
 
-    fn recordValue(self: BenchContext, args: var) !void {
+    fn recordValue(self: BenchContext, args: anytype) !void {
         if (self.mode != .Throughput)
             return;
             
@@ -122,13 +122,13 @@ pub fn main() !void {
     
     if (locked.items.len == 0) {
         try locked.append(WorkUnit{
-            .fromNs = 0 * std.time.nanosecond,
+            .fromNs = 0,
             .toNs = null,
         });
     }
     if (unlocked.items.len == 0) {
         try unlocked.append(WorkUnit{
-            .fromNs = 0 * std.time.nanosecond,
+            .fromNs = 0,
             .toNs = null,
         });
     }
@@ -295,7 +295,7 @@ fn runBench(ctx: BenchContext, comptime Mutex: type, comptime WorkerContext: typ
                     .worker_context = &self.contexes.items[i],
                 }, worker);
             self.event.set();
-            std.time.sleep(self.ctx.measure_seconds * std.time.second);
+            std.time.sleep(self.ctx.measure_seconds * std.time.ns_per_s);
             @atomicStore(bool, &self.stop, true, .Monotonic);
             for (threads) |t|
                 t.wait();
@@ -380,18 +380,18 @@ const TimeUnit = struct {
 
 fn getTimeUnit(ns: u64) TimeUnit {
     var tu: TimeUnit = undefined;
-    if (ns < std.time.microsecond) {
+    if (ns < std.time.ns_per_us) {
         tu.unit = "ns";
         tu.value = ns;
-    } else if (ns < std.time.millisecond) {
+    } else if (ns < std.time.ns_per_ms) {
         tu.unit = "us";
-        tu.value = ns / std.time.microsecond;
-    } else if (ns < std.time.second) {
+        tu.value = ns / std.time.ns_per_us;
+    } else if (ns < std.time.ns_per_s) {
         tu.unit = "ms";
-        tu.value = ns / std.time.millisecond;
+        tu.value = ns / std.time.ns_per_ms;
     } else {
         tu.unit = "s";
-        tu.value = ns / std.time.second;
+        tu.value = ns / std.time.ns_per_s;
     }
     return tu;
 }
@@ -400,7 +400,7 @@ fn parseInt(buf: []const u8) !usize {
     return std.fmt.parseInt(usize, buf, 10) catch return error.ExpectedInteger;
 }
 
-fn addThreads(array: var, threadStart: var, threadEnd: ?@TypeOf(threadStart)) !void {
+fn addThreads(array: anytype, threadStart: anytype, threadEnd: ?@TypeOf(threadStart)) !void {
     var start = threadStart;
     const end = threadEnd orelse threadStart;
     while (start <= end) : (start += 1) {
@@ -412,7 +412,7 @@ const WorkUnit = struct {
     fromNs: u64,
     toNs: ?u64,
 
-    fn print(self: WorkUnit, comptime header: var) void {
+    fn print(self: WorkUnit, comptime header: anytype) void {
         const from = getTimeUnit(self.fromNs);
         std.debug.warn("{}{}{}", .{
             header,
@@ -429,16 +429,16 @@ const WorkUnit = struct {
 fn parseWorkUnit(buf: []const u8) !u64 {
     var end = indexOf(u8, buf, "s") orelse return error.UnexpectedTimeUnit;
     const unit: u64 = switch (buf[end - 1]) {
-        'n' => b: { end -=1; break :b std.time.nanosecond; },
-        'u' => b: { end -=1; break :b std.time.microsecond; },
-        'm' => b: { end -=1; break :b std.time.millisecond; },
-        else => std.time.second,
+        'n' => b: { end -=1; break :b 1; },
+        'u' => b: { end -=1; break :b std.time.ns_per_us; },
+        'm' => b: { end -=1; break :b std.time.ns_per_ms; },
+        else => std.time.ns_per_s,
     };
     const time = std.fmt.parseInt(u64, buf[0..end], 10) catch return error.ExpectedTimeValue;
     return time * unit;
 }
 
-fn addWorkUnits(array: var, start: u64, end: ?u64) !void {
+fn addWorkUnits(array: anytype, start: u64, end: ?u64) !void {
     if (end) |e| {
         if (e < start)
             return error.InvalidTimeRange;
@@ -450,7 +450,7 @@ fn addWorkUnits(array: var, start: u64, end: ?u64) !void {
     });
 }
 
-fn parse(arg: var, args: var, array: var, comptime parseFn: var, comptime add: var) !void {
+fn parse(arg: anytype, args: anytype, array: anytype, comptime parseFn: anytype, comptime add: anytype) !void {
     var value = blk: {
         if (indexOf(u8, arg, "=")) |idx| {
             break :blk arg[idx + 1..];
