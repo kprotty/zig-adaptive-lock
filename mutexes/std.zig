@@ -6,11 +6,11 @@ pub const Mutex = struct {
     inner: std.Mutex,
 
     pub fn init(self: *Mutex) void {
-        self.inner = std.Mutex.init();
+        self.inner = std.Mutex{};
     }
 
     pub fn deinit(self: *Mutex) void {
-        self.inner.deinit();
+        self.* = undefined;
     }
 
     pub fn acquire(self: *Mutex) void {
