@@ -32,8 +32,8 @@ pub const Mutex = struct {
         local.event = 1;
         @atomicStore(?*Waiter, &prev.next, local, .Release);
 
-        for (@as([64]void, undefined)) |_| {
-            std.SpinLock.loopHint(1);
+        for (@as([3]void, undefined)) |_, i| {
+            std.SpinLock.loopHint(@as(usize, 1) << @intCast(std.math.Log2Int(usize), i));
             if (@atomicLoad(usize, &local.event, .Acquire) == 0)
                 return;
         }

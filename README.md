@@ -12,3 +12,6 @@ Run `zig run bench.zig` to get a help screen for benchmarks.
     - `zig run bench.zig throughput -l 10us -u 10ns`
 * benchmark locks for throughput spending a random time between 1 microsecond and 1 millisecond in lock
     - `zig run bench.zig throughput -l 1us-1ms`
+
+demo benchmark:
+- `zig run hybrid.zig -lc --release-fast -- throughput -l 10ns-100ns -u 10ns-500ns -t 2,6,13,16,32`

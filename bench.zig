@@ -4,14 +4,19 @@ const indexOf = std.mem.indexOf;
 const startsWith = std.mem.startsWith;
 const allocator = if (std.builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator;
 
-/// Add mutexes to benchmark here
-fn benchMutexes(ctx: BenchContext) !void {
-    try bench(ctx, @import("./mutexes/custom.zig").Mutex);
-    try bench(ctx, @import("./mutexes/zap.zig").Mutex);
-    try bench(ctx, @import("./mutexes/std.zig").Mutex);
-    try bench(ctx, @import("./mutexes/os.zig").Mutex);
-    try bench(ctx, @import("./mutexes/spin.zig").Mutex);
-    try bench(ctx, @import("./mutexes/mcs.zig").Mutex);
+
+pub fn main() !void {
+    try runBenchmark(struct {
+        fn run(ctx: anytype) !void {
+            // Add mutexes to benchmark here
+            try ctx.bench(@import("./mutexes/custom.zig").Mutex);
+            try ctx.bench(@import("./mutexes/zap.zig").Mutex);
+            try ctx.bench(@import("./mutexes/std.zig").Mutex);
+            try ctx.bench(@import("./mutexes/os.zig").Mutex);
+            try ctx.bench(@import("./mutexes/spin.zig").Mutex);
+            try ctx.bench(@import("./mutexes/mcs.zig").Mutex);
+        }
+    }.run);
 }
 
 fn help() void {
@@ -53,7 +58,7 @@ const BenchContext = struct {
             "-" ** 50,
             try std.fmt.bufPrint(
                 buffer[0..],
-                "{s:16} | {s:14} | {s:14}",
+                "{s:17} | {s:12} | {s:12}",
                 .{"name", "avg lock/s", "std. dev."},
             ),
         });
@@ -67,14 +72,14 @@ const BenchContext = struct {
         std.debug.warn("{}\n", .{
             try std.fmt.bufPrint(
                 buffer[0..],
-                "{s:16} | {:14} | {:14}",
+                "{s:17} | {:12} | {:12}",
                 args,
             ),
         });
     }
 };
 
-pub fn main() !void {
+pub fn runBenchmark(comptime benchFn: anytype) !void {
     var ctx: BenchContext = undefined;
     ctx.measure_seconds = 1;
     var threads = std.ArrayList(usize).init(allocator);
@@ -192,14 +197,21 @@ pub fn main() !void {
                 std.debug.warn("\n", .{});
                 
                 try ctx.recordHeader();
-                try benchMutexes(ctx);
+                try benchFn((struct {
+                    _ctx: BenchContext,
+
+                    pub fn bench(self: @This(), comptime MutexType: type) !void {
+                        try doBenchmark(self._ctx, MutexType);
+                    } 
+                }){ ._ctx = ctx });
+
                 std.debug.warn("\n", .{});
             }
         }
     }
 }
 
-fn bench(ctx: BenchContext, comptime Mutex: type) !void {
+fn doBenchmark(ctx: BenchContext, comptime Mutex: type) !void {
     switch (ctx.mode) {
         .Throughput => try benchThroughput(ctx, Mutex),
         .Latency => try benchLatency(ctx, Mutex),
