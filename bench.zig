@@ -40,7 +40,7 @@ const BenchContext = struct {
     num_threads: usize,
     work_locked: WorkUnit,
     work_unlocked: WorkUnit,
-    measure_seconds: u64,
+    measure_ns: u64,
     loads_per_ns: u64,
     timer_overhead: u64,
 
@@ -54,7 +54,7 @@ const BenchContext = struct {
             try std.fmt.bufPrint(
                 buffer[0..],
                 "{s:16} | {s:14} | {s:14}",
-                .{"name", "avg lock/s", "std. dev."},
+                .{"name", "average", "std. dev."},
             ),
         });
     }
@@ -76,11 +76,13 @@ const BenchContext = struct {
 
 pub fn main() !void {
     var ctx: BenchContext = undefined;
-    ctx.measure_seconds = 1;
+
+    var measures = std.ArrayList(WorkUnit).init(allocator);
     var threads = std.ArrayList(usize).init(allocator);
     var locked = std.ArrayList(WorkUnit).init(allocator);
     var unlocked = std.ArrayList(WorkUnit).init(allocator);
 
+    defer measures.deinit();
     defer threads.deinit();
     defer locked.deinit();
     defer unlocked.deinit();
@@ -101,15 +103,7 @@ pub fn main() !void {
     while (args.next(allocator)) |a| {
         const arg = try a;
         if (startsWith(u8, arg, "-m") or startsWith(u8, arg, "-measure") or startsWith(u8, arg, "--measure")) {
-            const seconds_str = blk: {
-                if (indexOf(u8, arg, "=")) |idx| {
-                    break :blk arg[idx+1..];
-                } else {
-                    break :blk (args.next(allocator) orelse return help()) catch return help();
-                }
-            };
-            ctx.measure_seconds = std.fmt.parseInt(u64, seconds_str, 10) catch @panic("Expected seconds for measure time");
-            ctx.measure_seconds = std.math.max(ctx.measure_seconds, 1);
+            try parse(arg, &args, &measures, parseWorkUnit, addWorkUnits);
         } else if (startsWith(u8, arg, "-t") or startsWith(u8, arg, "-threads") or startsWith(u8, arg, "--threads")) {
             try parse(arg, &args, &threads, parseInt, addThreads);
         } else if (startsWith(u8, arg, "-l") or startsWith(u8, arg, "-locked") or startsWith(u8, arg, "--locked")) {
@@ -120,7 +114,14 @@ pub fn main() !void {
             std.debug.panic("Unknown argument: {}\n", .{arg});
         }
     }
-    
+
+    if (measures.items.len == 0) {
+        try measures.append(WorkUnit {
+            .fromNs = 1 * std.time.ns_per_s,
+            .toNs = null,
+        });
+    }
+
     if (locked.items.len == 0) {
         try locked.append(WorkUnit{
             .fromNs = 0,
@@ -169,31 +170,34 @@ pub fn main() !void {
     };
 
     ctx.loads_per_ns = blk: {
-        const NUM_LOADS = 10000;
-        var value: usize = undefined;
+        const NUM_PAUSES = 10000;
         const start = timer.read();
-        for (@as([NUM_LOADS]void, undefined)) |_|
-            value = @ptrCast(*volatile usize, &value).*;
+        for (@as([NUM_PAUSES]void, undefined)) |_|
+            std.SpinLock.loopHint(1);
         const end = timer.read();
         const loads = (end - start) - ctx.timer_overhead;
-        break :blk std.math.max(NUM_LOADS / loads, 1);
+        break :blk std.math.max(NUM_PAUSES / loads, 1);
     };
 
-    for (locked.items) |work_locked| {
-        for (unlocked.items) |work_unlocked| {
+    for (unlocked.items) |work_unlocked| {
+        for (locked.items) |work_locked| {
             for (threads.items) |num_threads| {
-                ctx.num_threads = num_threads;
-                ctx.work_locked = work_locked;
-                ctx.work_unlocked = work_unlocked;
+                for (measures.items) |measure| {
+                    ctx.num_threads = num_threads;
+                    ctx.work_locked = work_locked;
+                    ctx.work_unlocked = work_unlocked;
+                    ctx.measure_ns = measure.fromNs;
 
-                std.debug.warn("threads={}", .{num_threads});
-                work_locked.print(" locked=");
-                work_unlocked.print(" unlocked=");
-                std.debug.warn("\n", .{});
-                
-                try ctx.recordHeader();
-                try benchMutexes(ctx);
-                std.debug.warn("\n", .{});
+                    measure.print("measure=");
+                    std.debug.warn(" threads={}", .{num_threads});
+                    work_locked.print(" locked=");
+                    work_unlocked.print(" unlocked=");
+                    std.debug.warn("\n", .{});
+                    
+                    try ctx.recordHeader();
+                    try benchMutexes(ctx);
+                    std.debug.warn("\n", .{});
+                }
             }
         }
     }
@@ -223,7 +227,7 @@ fn benchThroughput(ctx: BenchContext, comptime Mutex: type) !void {
 
     defer results.deinit();
     for (results.items) |*result| {
-        result.iterations /= ctx.measure_seconds;
+        result.iterations /= std.math.max(1, ctx.measure_ns / std.time.ns_per_s);
     }
 
     const average = blk: {
@@ -264,7 +268,7 @@ fn runBench(ctx: BenchContext, comptime Mutex: type, comptime WorkerContext: typ
     const Context = struct {
         const Self = @This();
 
-        mutex: Mutex align(128) = undefined,
+        mutex: Mutex align(256) = undefined,
         ctx: BenchContext,
         event: std.ResetEvent = undefined,
         contexes: std.ArrayList(WorkerContext) = undefined,
@@ -296,7 +300,7 @@ fn runBench(ctx: BenchContext, comptime Mutex: type, comptime WorkerContext: typ
                     .worker_context = &self.contexes.items[i],
                 }, worker);
             self.event.set();
-            std.time.sleep(self.ctx.measure_seconds * std.time.ns_per_s);
+            std.time.sleep(self.ctx.measure_ns);
             @atomicStore(bool, &self.stop, true, .Monotonic);
             for (threads) |t|
                 t.wait();
@@ -320,9 +324,8 @@ fn runBench(ctx: BenchContext, comptime Mutex: type, comptime WorkerContext: typ
 
         fn work(loads: u64) void {
             var i = loads;
-            var value: usize = undefined;
             while (i != 0) : (i -= 1) {
-                value = @ptrCast(*volatile usize, &value).*;
+                std.SpinLock.loopHint(1);
             }
         }
 

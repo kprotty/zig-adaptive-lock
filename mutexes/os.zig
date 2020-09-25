@@ -30,24 +30,32 @@ pub const Mutex =
         struct {
             pub const NAME = "pthread_mutex_t";
 
-            inner: std.c.pthread_mutex_t,
+            inner: pthread_t,
 
             pub fn init(self: *Mutex) void {
-                self.inner = std.c.PTHREAD_MUTEX_INITIALIZER;
+                _ = pthread_mutex_init(&self.inner, 0);
             }
 
             pub fn deinit(self: *Mutex) void {
-                _ = std.c.pthread_mutex_destroy(&self.inner);
-                self.* = undefined;
+                _ = pthread_mutex_destroy(&self.inner);
             }
 
             pub fn acquire(self: *Mutex) void {
-                _ = std.c.pthread_mutex_lock(&self.inner);
+                _ = pthread_mutex_lock(&self.inner);
             }
 
             pub fn release(self: *Mutex) void {
-                _ = std.c.pthread_mutex_unlock(&self.inner);
+                _ = pthread_mutex_unlock(&self.inner);
             }
+
+            const pthread_t = extern struct {
+                _opaque: [64]u8 align(16),
+            };
+
+            extern "c" fn pthread_mutex_init(p: *pthread_t, a: usize) callconv(.C) c_int;
+            extern "c" fn pthread_mutex_destroy(p: *pthread_t) callconv(.C) c_int;
+            extern "c" fn pthread_mutex_lock(p: *pthread_t) callconv(.C) c_int;
+            extern "c" fn pthread_mutex_unlock(p: *pthread_t) callconv(.C) c_int;
         }
     else if (std.builtin.os.tag == .linux)
         struct {
