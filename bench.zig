@@ -6,6 +6,7 @@ const allocator = if (std.builtin.link_libc) std.heap.c_allocator else std.heap.
 
 /// Add mutexes to benchmark here
 fn benchMutexes(ctx: BenchContext) !void {
+    try bench(ctx, @import("./mutexes/test_fair_lock.zig").Mutex);
     try bench(ctx, @import("./mutexes/test_new_lock.zig").Mutex);
     try bench(ctx, @import("./mutexes/custom.zig").Mutex);
     try bench(ctx, @import("./mutexes/zap.zig").Mutex);
@@ -25,7 +26,7 @@ fn help() void {
         \\ fairness                    Measure how even of a chance each thread has at lock acquisition
         \\
         \\Options:
-        \\ -m/measure [seconds]        Amount of seconds to measure each mutex during the benchmark
+        \\ -m/measure [time][units]    CSV list of time to measure each mutex during the benchmark
         \\ -t/threads [num]/[from-to]  CSV list of single/range thread counts to use when benchmarking
         \\ -l/locked [time][units]     CSV list of time to spend inside the critical section on each iteration in nanoseconds
         \\ -u/unlocked [time][units]   CSV list of time to spend outside the critical section on each iteration in nanoseconds
