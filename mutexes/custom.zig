@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub const Mutex = struct {
-    pub const NAME = "custom";
+    pub const NAME = "word_lock (waking)";
 
     const UNLOCKED = 0;
     const LOCKED = 1 << 0;
@@ -91,8 +91,6 @@ pub const Mutex = struct {
 
             if (is_waking)
                 new_state &= ~@as(usize, WAKING);
-
-            
 
             if (@cmpxchgWeak(
                 usize,
