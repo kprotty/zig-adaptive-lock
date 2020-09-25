@@ -267,7 +267,7 @@ const Time = struct {
                     return (c *% std.time.ns_per_s) / getFreq();
                 }
             }
-        else if (std.Target.current.isLinux() or std.builtin.link_libc)
+        else if (std.builtin.os.tag == .linux or std.builtin.link_libc)
             struct {
                 pub const is_monotonic = !(std.builtin.os.tag == .linux and (
                     std.builtin.arch == .arm or
@@ -278,7 +278,7 @@ const Time = struct {
                 fn nanotime() u64 {
                     var ts: std.os.timespec = undefined;
                     std.os.clock_gettime(std.os.CLOCK_MONOTONIC, &ts) catch unreachable;
-                    return @intCast(u64, ts.tv_sec) * ns_per_s + @intCast(u64, ts.tv_nsec);
+                    return @intCast(u64, ts.tv_sec) * std.time.ns_per_s + @intCast(u64, ts.tv_nsec);
                 }
             }
         else if (std.Target.current.isDarwin())

@@ -19,10 +19,10 @@ pub const supports_pthread = switch (std.builtin.os.tag) {
 const RawAutoResetEvent = 
     if (std.builtin.os.tag == .windows)
         @import("./os_windows.zig").AutoResetEvent
-    else if (std.builtin.os.tag == .linux)
-        @import("./os_linux.zig").AutoResetEvent
     else if (std.builtin.link_libc and supports_pthread)
         @import("./os_posix.zig").AutoResetEvent
+    else if (std.builtin.os.tag == .linux)
+        @import("./os_linux.zig").AutoResetEvent
     else
         @import("./os_none.zig").AutoResetEvent;
 
