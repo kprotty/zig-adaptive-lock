@@ -140,15 +140,30 @@ const Windows = struct {
     };
 };
 
-const Windows = struct {
+const Posix = struct {
+    const pthread_t = extern struct {
+        _opaque: [64]u8 align(16),
+    };
+
+    extern "c" fn pthread_cond_init(p: *pthread_t, a: usize) callconv(.C) c_int;
+    extern "c" fn pthread_cond_destroy(p: *pthread_t) callconv(.C) c_int;
+    extern "c" fn pthread_cond_wait(noalias p: *pthread_t, noalias m: *pthread_t) callconv(.C) c_int;
+    extern "c" fn pthread_cond_signal(p: *pthread_t) callconv(.C) c_int;
+
+    extern "c" fn pthread_mutex_init(p: *pthread_t, a: usize) callconv(.C) c_int;
+    extern "c" fn pthread_mutex_destroy(p: *pthread_t) callconv(.C) c_int;
+    extern "c" fn pthread_mutex_lock(p: *pthread_t) callconv(.C) c_int;
+    extern "c" fn pthread_mutex_unlock(p: *pthread_t) callconv(.C) c_int;
+
     pub const Parker = extern struct {
         state: State,
         cond: pthread_t,
         mutex: pthread_t,
     
-        const State = enum {
+        const State = extern enum {
             empty,
             waiting,
+            sleeping,
             notified,
         };
 
@@ -161,49 +176,50 @@ const Windows = struct {
         }
 
         pub fn deinit(self: *Parker) void {
-            self.* = undefined;
+            if (self.state != .empty) {
+                _ = pthread_cond_destroy(&self.cond);
+                _ = pthread_mutex_destroy(&self.mutex);
+            }
         }
 
         pub fn prepare(self: *Parker) void {
             switch (self.state) {
                 .empty => {
-                    self.thread_id = windows.kernel32.GetCurrentThreadId();
+                    _ = pthread_cond_init(&self.cond, 0);
+                    _ = pthread_mutex_init(&self.mutex, 0);
                     self.state = .waiting;
                 },
                 .waiting => {},
+                .sleeping => self.state = .waiting,
                 .notified => self.state = .waiting,
             }
         }
 
         pub fn park(self: *Parker) void {
-            const thread_id = @intToPtr(windows.PVOID, self.thread_id);
+            _ = pthread_mutex_lock(&self.mutex);
+            defer _ = pthread_mutex_unlock(&self.mutex);
 
-            while (true) {
-                switch (@atomicLoad(State, &self.state, .Acquire)) {
-                    .empty => unreachable,
-                    .waiting => {},
-                    .notified => return,
-                }
+            if (self.state == .waiting)
+                self.state = .sleeping;
 
-                switch (NtWaitForAlertByThreadId(thread_id, null)) {
-                    .SUCCESS => {},
-                    .ALERTED => {},
-                    .TIMEOUT => {},
-                    .USER_APC => {},
-                    else => unreachable,
-                }
-            }
+            while (self.state != .notified)
+                _ = pthread_cond_wait(&self.cond, &self.mutex);
         }
 
         pub fn unpark(self: *Parker) void {
-            const thread_id = @intToPtr(windows.PVOID, self.thread_id);
+            _ = pthread_mutex_lock(&self.mutex);
+            defer _ = pthread_mutex_unlock(&self.mutex);
 
-            @atomicStore(State, &self.state, .notified, .Release);
-
-            switch (NtAlertThreadByThreadId(thread_id)) {
-                .SUCCESS => {},
-                else => unreachable,
-            } 
+            
+            switch (self.state) {
+                .empty => @panic("state is empty"),
+                .waiting => self.state = .notified,
+                .sleeping => {
+                    self.state = .notified;
+                    _ = pthread_cond_signal(&self.cond);
+                },
+                .notified => {},
+            }
         }
     };
 };

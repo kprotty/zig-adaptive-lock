@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 const std = @import("std");
+const Parker = @import("../v2/parker.zig").OsParker;
 
 pub const Mutex = struct {
     pub const NAME = "word_lock_waking";
@@ -27,7 +27,7 @@ pub const Mutex = struct {
         prev: ?*Waiter align((~WAITING) + 1),
         next: ?*Waiter,
         tail: ?*Waiter,
-        event: std.ResetEvent, 
+        parker: Parker,
     };
 
     state: usize = UNLOCKED,
@@ -67,10 +67,12 @@ pub const Mutex = struct {
     fn acquireSlow(self: *Mutex) void {
         @setCold(true);
 
+        var waiter: Waiter = undefined;
+        waiter.parker = Parker.init();
+        defer waiter.parker.deinit();
+
         var spin: u4 = 0;
         var is_waking = false;
-        var has_event = false;
-        var waiter: Waiter = undefined;
         var state = @atomicLoad(usize, &self.state, .Monotonic);
 
         while (true) {
@@ -96,12 +98,8 @@ pub const Mutex = struct {
                 waiter.prev = null;
                 waiter.next = head;
                 waiter.tail = if (head == null) &waiter else null;
+                waiter.parker.prepare();
                 new_state = (new_state & ~WAITING) | @ptrToInt(&waiter);
-
-                if (!has_event) {
-                    has_event = true;
-                    waiter.event = std.ResetEvent.init(); 
-                }
             }
 
             if (is_waking)
@@ -122,16 +120,11 @@ pub const Mutex = struct {
             if (state & LOCKED == 0)
                 break;
 
-            waiter.event.wait();
-            waiter.event.reset();
-
+            waiter.parker.park();
             spin = 0;
             is_waking = true;
             state = @atomicLoad(usize, &self.state, .Monotonic);
         }
-
-        if (has_event)
-            waiter.event.deinit();
     }
 
     pub fn release(self: *Mutex) void {
@@ -201,7 +194,7 @@ pub const Mutex = struct {
                 continue;
             }
 
-            tail.event.set();
+            tail.parker.unpark();
             return;
         }
     }

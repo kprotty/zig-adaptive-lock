@@ -19,21 +19,25 @@ pub const Mutex = struct {
     }
 
     pub fn acquire(self: *Mutex) void {
-        var spin: usize = 0;
-        var state: State = .Unlocked;
+        var spin: std.math.Log2Int(usize) = 0;
         while (true) {
-            if (state == .Unlocked) {
-                state = @cmpxchgWeak(
-                    State,
-                    &self.state,
-                    .Unlocked,
-                    .Locked,
-                    .Acquire,
-                    .Monotonic,
-                ) orelse return;
+            if (@atomicRmw(
+                State,
+                &self.state,
+                .Xchg,
+                .Locked,
+                .Acquire,
+            ) == .Unlocked) {
+                return;
+            }
+
+            if (spin <= 6) {
+                std.SpinLock.loopHint(@as(usize, 1) << spin);
+                spin += 1;
+            } else if (std.builtin.os.tag == .windows) {
+                std.os.windows.kernel32.Sleep(0);
             } else {
-                std.SpinLock.loopHint(1);
-                state = @atomicLoad(State, &self.state, .Monotonic);
+                std.os.sched_yield() catch unreachable;
             }
         }
     }

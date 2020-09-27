@@ -11,10 +11,10 @@ fn benchMutexes(ctx: BenchContext) !void {
     // try bench(ctx, @import("./mutexes/test_fair_lock.zig").Mutex);
     try bench(ctx, @import("./mutexes/test_new_lock.zig").Mutex);
     
-    try bench(ctx, @import("./mutexes/zap.zig").Mutex);
+    // try bench(ctx, @import("./mutexes/zap.zig").Mutex);
     // try bench(ctx, @import("./mutexes/std.zig").Mutex);
     try bench(ctx, @import("./mutexes/os.zig").Mutex);
-    // try bench(ctx, @import("./mutexes/spin.zig").Mutex);
+    try bench(ctx, @import("./mutexes/spin.zig").Mutex);
     // try bench(ctx, @import("./mutexes/mcs.zig").Mutex);
 }
 

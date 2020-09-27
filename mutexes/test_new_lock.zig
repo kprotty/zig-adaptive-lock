@@ -1,5 +1,6 @@
 const std = @import("std");
 const nanotime = @import("./nanotime.zig").nanotime;
+const Parker = @import("../v2/parker.zig").OsParker;
 
 pub const Mutex = struct {
     pub const NAME = "test_new_lock";
@@ -12,7 +13,7 @@ pub const Mutex = struct {
         prev: ?*Waiter align((~WAITING) + 1),
         next: ?*Waiter,
         tail: ?*Waiter,
-        event: std.ResetEvent,
+        parker: Parker,
         acquired: bool,
         force_fair_at: u64,
     };
@@ -54,9 +55,12 @@ pub const Mutex = struct {
     fn acquireSlow(self: *Mutex) void {
         @setCold(true);
 
-        var spin: u4 = 0;
-        var has_event = false;
         var waiter: Waiter = undefined;
+        waiter.parker = Parker.init();
+        defer waiter.parker.deinit();
+
+        var spin: u4 = 0;
+        var has_timeout = false;
         var state = @atomicLoad(usize, &self.state, .Monotonic);
 
         while (true) {
@@ -82,17 +86,18 @@ pub const Mutex = struct {
                 waiter.prev = null;
                 waiter.next = head;
                 waiter.tail = if (head == null) &waiter else null;
+                waiter.parker.prepare();
                 new_state = (new_state & ~WAITING) | @ptrToInt(&waiter);
 
-                if (!has_event) {
-                    has_event = true;
-                    waiter.event = std.ResetEvent.init();
-                    waiter.force_fair_at = nanotime();
-                    
+                if (!has_timeout) {
+                    has_timeout = true;
+
                     var timeout = @as(u64, @ptrToInt(head orelse &waiter));
                     timeout = (13 *% timeout) ^ (timeout >> 15);
                     timeout %= 500 * std.time.ns_per_us;
                     timeout += 500 * std.time.ns_per_us;
+
+                    waiter.force_fair_at = nanotime();
                     waiter.force_fair_at += timeout;
                 }
             }
@@ -112,20 +117,14 @@ pub const Mutex = struct {
             if (state & LOCKED == 0)
                 break;
 
-            waiter.event.wait();
-            @fence(.Acquire);
+            waiter.parker.park();
             if (waiter.acquired) {
                 break;
-            } else {
-                waiter.event.reset();
             }
 
             spin = 0;
             state = @atomicLoad(usize, &self.state, .Monotonic);
         }
-
-        if (has_event)
-            waiter.event.deinit();
     }
 
     pub fn release(self: *Mutex) void {
@@ -187,8 +186,7 @@ pub const Mutex = struct {
             }
 
             tail.acquired = be_fair;
-            @fence(.Release);
-            tail.event.set();
+            tail.parker.unpark();
             return;
         }
     }
