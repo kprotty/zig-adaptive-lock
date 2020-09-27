@@ -59,25 +59,18 @@ pub const Mutex =
         }
     else if (std.builtin.os.tag == .linux)
         struct {
-            pub const NAME = "futex";
+            pub const NAME = "go_futex";
 
-            state: usize,
-
-            const UNLOCKED = 0;
-            const LOCKED = 1 << 0;
-            const WAKING = 1 << 8;
-            const WAITING = ~@as(usize, (1 << 9) - 1);
-
-            const linux = std.os.linux;
-            const Waiter = extern struct {
-                prev: ?*Waiter align(1 << 9),
-                next: ?*Waiter,
-                tail: ?*Waiter,
-                key: i32,
+            const State = enum(i32) {
+                unlocked = 0,
+                locked = 1,
+                sleeping = 2,
             };
 
+            state: State,
+
             pub fn init(self: *Mutex) void {
-                self.state = UNLOCKED;
+                self.state = .unlocked;
             }
 
             pub fn deinit(self: *Mutex) void {
@@ -85,154 +78,71 @@ pub const Mutex =
             }
 
             pub fn acquire(self: *Mutex) void {
-                if (@cmpxchgWeak(
-                    u8,
-                    @ptrCast(*u8, &self.state),
-                    UNLOCKED,
-                    LOCKED,
-                    .Acquire,
-                    .Monotonic,
-                )) |_| {
-                    self.acquireSlow();
-                }
+                const state = @atomicRmw(State, &self.state, .Xchg, .locked, .Acquire);
+                if (state != .unlocked)
+                    self.acquireSlow(state);
             }
 
-            fn acquireSlow(self: *Mutex) void {
+            fn acquireSlow(self: *Mutex, current_state: State) void {
                 @setCold(true);
-                
+
                 var spin: u3 = 0;
-                var is_waking = false;
-                var waiter: Waiter = undefined;
-                var state = @atomicLoad(usize, &self.state, .Monotonic);
-                
+                var wait = current_state;
+                var state = @atomicLoad(State, &self.state, .Monotonic);
+
                 while (true) {
-                    var new_state = state;
-                    
-                    if (state & LOCKED == 0) {
-                        new_state |= LOCKED;
+                    if (state == .unlocked) {
+                        _ = @cmpxchgWeak(
+                            State,
+                            &self.state,
+                            .unlocked,
+                            wait,
+                            .Acquire,
+                            .Monotonic,
+                        ) orelse return;
+                    }
+
+                    if (spin < 5) {
+                        if (spin < 4) {
+                            std.SpinLock.loopHint(@as(usize, 3) << spin);
+                        } else {
+                            std.os.sched_yield() catch unreachable;
+                        }
+                        spin += 1;
+                        state = @atomicLoad(State, &self.state, .Monotonic);
 
                     } else {
-                        const head = @intToPtr(?*Waiter, state & WAITING);
+                        state = @atomicRmw(State, &self.state, .Xchg, .sleeping, .Acquire);
+                        if (state == .unlocked)
+                            return;
 
-                        if (head == null and spin < 5) {
-                            spin += 1;
-                            std.SpinLock.loopHint(@as(usize, 1) << spin);
-                            state = @atomicLoad(usize, &self.state, .Monotonic);
-                            continue;
+                        wait = .sleeping;
+                        while (state == .sleeping) {
+                            _ = std.os.linux.futex_wait(
+                                @ptrCast(*const i32, &self.state),
+                                std.os.linux.FUTEX_PRIVATE_FLAG | std.os.linux.FUTEX_WAIT,
+                                @enumToInt(State.sleeping),
+                                null,
+                            );
+                            state = @atomicLoad(State, &self.state, .Monotonic);
                         }
-
-                        waiter.key = 0;
-                        waiter.next = head;
-                        waiter.prev = null;
-                        waiter.tail = if (head == null) &waiter else null;
-                        new_state = @ptrToInt(&waiter) | (state & ~WAITING);
-                    }
-
-                    if (is_waking)
-                        new_state &= ~@as(usize, WAKING);
-
-                    if (@cmpxchgWeak(
-                        usize,
-                        &self.state,
-                        state,
-                        new_state,
-                        .AcqRel,
-                        .Monotonic,
-                    )) |updated_state| {
-                        state = updated_state;
-                        continue;
-                    }
-
-                    if (state & LOCKED == 0)
-                        return;
-
-                    while (@atomicLoad(i32, &waiter.key, .Acquire) == 0) {
-                        _ = linux.futex_wait(
-                            &waiter.key,
-                            linux.FUTEX_WAIT | linux.FUTEX_PRIVATE_FLAG,
-                            @as(i32, 0),
-                            null,
-                        );
-                    }
-
-                    spin = 0;
-                    is_waking = true;
-                    state = @atomicLoad(usize, &self.state, .Monotonic);
+                    }                    
                 }
             }
 
             pub fn release(self: *Mutex) void {
-                @atomicStore(u8, @ptrCast(*u8, &self.state), UNLOCKED, .Release);
-
-                const state = @atomicLoad(usize, &self.state, .Monotonic);
-                if ((state & WAITING != 0) and (state & (WAKING | LOCKED) == 0))
-                    self.releaseSlow(state);
+                const state = @atomicRmw(State, &self.state, .Xchg, .unlocked, .Release);
+                if (state == .sleeping)
+                    self.releaseSlow();
             }
 
-            fn releaseSlow(self: *Mutex, current_state: usize) void {
+            fn releaseSlow(self: *Mutex) void {
                 @setCold(true);
-
-                var state = current_state;
-                while (true) {
-                    if ((state & WAITING == 0) or (state & (WAKING | LOCKED) != 0))
-                        return;
-                    state = @cmpxchgWeak(
-                        usize,
-                        &self.state,
-                        state,
-                        state | WAKING,
-                        .Acquire,
-                        .Monotonic,
-                    ) orelse break;
-                }
-
-                while (true) {
-                    const head = @intToPtr(*Waiter, state & WAITING);
-                    const tail = head.tail orelse blk: {
-                        var current = head;
-                        while (true) {
-                            const next = current.next.?;
-                            next.prev = current;
-                            if (next.tail) |tail| {
-                                head.tail = tail;
-                                break :blk tail;
-                            } else {
-                                current = next;
-                            }
-                        }
-                    };
-
-                    if (state & LOCKED != 0) {
-                        state = @cmpxchgWeak(
-                            usize,
-                            &self.state,
-                            state,
-                            state & ~@as(usize, WAKING),
-                            .Release,
-                            .Acquire,
-                        ) orelse break;
-                        continue;
-                    }
-
-                    if (tail.prev) |new_tail| {
-                        head.tail = new_tail;
-                        @fence(.Release);
-                    } else if (@cmpxchgWeak(
-                        usize,
-                        &self.state,
-                        state,
-                        WAKING,
-                        .Release,
-                        .Acquire,
-                    )) |updated_state| {
-                        state = updated_state;
-                        continue;
-                    }
-
-                    @atomicStore(i32, &tail.key, 1, .Release);
-                    _ = linux.futex_wake(&tail.key, linux.FUTEX_WAKE | linux.FUTEX_PRIVATE_FLAG, 1);
-                    break;
-                }
+                _ = std.os.linux.futex_wake(
+                    @ptrCast(*const i32, &self.state),
+                    std.os.linux.FUTEX_PRIVATE_FLAG | std.os.linux.FUTEX_WAKE,
+                    @as(i32, 1),
+                );
             }
         }
     else 

@@ -63,6 +63,52 @@ const Os = switch (std.builtin.os.tag) {
     else => @compileError("OS not supported"),
 };
 
+const Linux = struct {
+    const linux = std.os.linux;
+
+    pub const Parker = extern struct {
+        state: State,
+        
+        const State = extern enum(i32) {
+            waiting,
+            notified,
+        };
+
+        pub fn init() Parker {
+            return undefined;
+        }
+
+        pub fn deinit(self: *Parker) void {
+            self.* = undefined;
+        }
+
+        pub fn prepare(self: *Parker) void {
+            self.state = .waiting;
+        }
+
+        pub fn park(self: *Parker) void {
+            while (@atomicLoad(State, &self.state, .Acquire) == .waiting) {
+                _ = linux.futex_wait(
+                    @ptrCast(*const i32, &self.state),
+                    linux.FUTEX_WAIT | linux.FUTEX_PRIVATE_FLAG,
+                    @enumToInt(State.waiting),
+                    null,
+                );
+            }
+        }
+
+        pub fn unpark(self: *Parker) void {
+            @atomicStore(State, &self.state, .notified, .Release);
+            _ = linux.futex_wake(
+                @ptrCast(*const i32, &self.state),
+                linux.FUTEX_WAKE | linux.FUTEX_PRIVATE_FLAG,
+                1,
+            );
+        }
+    };
+};
+
+
 const Windows = struct {
     const windows = std.os.windows;
 

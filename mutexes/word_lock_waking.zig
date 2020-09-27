@@ -20,8 +20,8 @@ pub const Mutex = struct {
 
     const UNLOCKED = 0;
     const LOCKED = 1 << 0;
-    const WAKING = 1 << 1;
-    const WAITING = ~@as(usize, (1 << 2) - 1);
+    const WAKING = 1 << 8;
+    const WAITING = ~@as(usize, (1 << 9) - 1);
 
     const Waiter = struct {
         prev: ?*Waiter align((~WAITING) + 1),
@@ -82,14 +82,8 @@ pub const Mutex = struct {
             if (state & LOCKED == 0) {
                 new_state |= LOCKED;
 
-            } else if (head == null and spin <= 10) {
-                if (spin <= 3) {
-                    std.SpinLock.loopHint(@as(usize, 1) << spin);
-                } else if (std.builtin.os.tag == .windows) {
-                    std.os.windows.kernel32.Sleep(1);
-                } else {
-                    std.os.sched_yield() catch unreachable;
-                }
+            } else if (head == null and spin <= 5) {
+                std.SpinLock.loopHint(@as(usize, 1) << spin);
                 spin += 1;
                 state = @atomicLoad(usize, &self.state, .Monotonic);
                 continue;
@@ -128,16 +122,17 @@ pub const Mutex = struct {
     }
 
     pub fn release(self: *Mutex) void {
-        const state = @atomicRmw(usize, &self.state, .Sub, LOCKED, .Release);
+        @atomicStore(u8, @ptrCast(*u8, &self.state), UNLOCKED, .Release);
 
-        if ((state & WAITING != 0) and (state & WAKING == 0))
-            self.releaseSlow();
+        const state = @atomicLoad(usize, &self.state, .Monotonic);
+        if ((state & WAITING != 0) and (state & (WAKING | LOCKED) == 0))
+            self.releaseSlow(state);
     }
 
-    fn releaseSlow(self: *Mutex) void {
+    fn releaseSlow(self: *Mutex, current_state: usize) void {
         @setCold(true);
 
-        var state = @atomicLoad(usize, &self.state, .Monotonic);
+        var state = current_state;
         while (true) {
             if ((state & WAITING == 0) or (state & (LOCKED | WAKING) != 0))
                 return;
@@ -172,7 +167,7 @@ pub const Mutex = struct {
                     &self.state,
                     state,
                     state & ~@as(usize, WAKING),
-                    .AcqRel,
+                    .Release,
                     .Acquire,
                 ) orelse return;
                 continue;
@@ -187,7 +182,7 @@ pub const Mutex = struct {
                 &self.state,
                 state,
                 state & WAKING,
-                .AcqRel,
+                .Release,
                 .Acquire,
             )) |updated_state| {
                 state = updated_state;
