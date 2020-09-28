@@ -113,29 +113,10 @@ const Windows = struct {
     const windows = std.os.windows;
 
     pub const Parker = extern struct {
-        state: State,
-        thread_id: windows.DWORD,
-
-        extern "NtDll" fn NtAlertThreadByThreadId(
-            thread_id: windows.PVOID,
-        ) callconv(.Stdcall) windows.NTSTATUS;
-
-        extern "NtDll" fn NtWaitForAlertByThreadId(
-            thread_id: windows.PVOID,
-            timeout: ?*windows.LARGE_INTEGER,
-        ) callconv(.Stdcall) windows.NTSTATUS;
-
-        const State = extern enum(usize) {
-            empty,
-            waiting,
-            notified,
-        };
+        key: i32,
 
         pub fn init() Parker {
-            return Parker{
-                .state = .empty,
-                .thread_id = undefined,
-            };
+            return undefined;
         }
 
         pub fn deinit(self: *Parker) void {
@@ -143,46 +124,40 @@ const Windows = struct {
         }
 
         pub fn prepare(self: *Parker) void {
-            switch (self.state) {
-                .empty => {
-                    self.thread_id = windows.kernel32.GetCurrentThreadId();
-                    self.state = .waiting;
-                },
-                .waiting => {},
-                .notified => self.state = .waiting,
-            }
+            self.key = 0;
         }
 
         pub fn park(self: *Parker) void {
-            const thread_id = @intToPtr(windows.PVOID, self.thread_id);
-
-            while (true) {
-                switch (@atomicLoad(State, &self.state, .Acquire)) {
-                    .empty => unreachable,
-                    .waiting => {},
-                    .notified => return,
-                }
-
-                switch (NtWaitForAlertByThreadId(thread_id, null)) {
-                    .SUCCESS => {},
-                    .ALERTED => {},
-                    .TIMEOUT => {},
-                    .USER_APC => {},
-                    else => unreachable,
-                }
-            }
+            _ = NtWaitForKeyedEvent(
+                null,
+                &self.key,
+                windows.FALSE,
+                null,
+            );
         }
 
         pub fn unpark(self: *Parker) void {
-            const thread_id = @intToPtr(windows.PVOID, self.thread_id);
-
-            @atomicStore(State, &self.state, .notified, .Release);
-
-            switch (NtAlertThreadByThreadId(thread_id)) {
-                .SUCCESS => {},
-                else => unreachable,
-            } 
+            _ = NtReleaseKeyedEvent(
+                null,
+                &self.key,
+                windows.FALSE,
+                null,
+            );
         }
+
+        pub extern "NtDll" fn NtWaitForKeyedEvent(
+            handle: ?windows.HANDLE,
+            key: *const i32,
+            alertable: windows.BOOLEAN,
+            timeout: ?*const windows.LARGE_INTEGER,
+        ) callconv(.Stdcall) windows.NTSTATUS;
+
+        pub extern "NtDll" fn NtReleaseKeyedEvent(
+            handle: ?windows.HANDLE,
+            key: *const i32,
+            alertable: windows.BOOLEAN,
+            timeout: ?*const windows.LARGE_INTEGER,
+        ) callconv(.Stdcall) windows.NTSTATUS;
     };
 };
 
