@@ -1,6 +1,27 @@
 const std = @import("std");
 const nanotime = @import("./nanotime.zig").nanotime;
-const InnerLock = @import("./test_new_lock.zig").Mutex;
+const Parker = @import("../v2/parker.zig").OsParker;
+
+const InnerLock = @import("./word_lock.zig").Mutex;
+const _InnerLock = struct {
+    locked: bool,
+
+    fn init(self: *@This()) void {
+        self.locked = false;
+    }
+
+    fn deinit(self: *@This()) void {
+        self.locked = undefined;
+    }
+
+    fn acquire(self: *@This()) void {
+
+    }
+
+    fn release(self: *@This()) void {
+        
+    }
+};
 
 pub const Mutex = struct {
     pub const NAME = "test_fair_lock";
@@ -12,7 +33,7 @@ pub const Mutex = struct {
     const Waiter = struct {
         next: ?*Waiter,
         tail: *Waiter,
-        event: std.ResetEvent,
+        parker: Parker,
         acquired: bool,
         force_fair_at: u64,
     };
@@ -112,22 +133,23 @@ pub const Mutex = struct {
 
                 if (!has_event) {
                     has_event = true;
-                    waiter.event = std.ResetEvent.init();
+                    waiter.parker = Parker.init();
+                    waiter.parker.prepare();
                     waiter.force_fair_at = nanotime();
                     
                     var timeout = @as(u64, @ptrToInt(self.queue orelse &waiter));
                     timeout = (13 *% timeout) ^ (timeout >> 15);
-                    timeout %= 1000 * std.time.ns_per_us;
+                    timeout %= 1 * std.time.ns_per_ms;
                     waiter.force_fair_at += timeout;
                 }
             }
 
             if (is_waiting) {
-                waiter.event.wait();
+                waiter.parker.park();
                 if (waiter.acquired) {
                     break;
                 } else {
-                    waiter.event.reset();
+                    waiter.parker.prepare();
                 }
             }
 
@@ -136,7 +158,7 @@ pub const Mutex = struct {
         }
 
         if (has_event)
-            waiter.event.deinit();
+            waiter.parker.deinit();
     }
 
     pub fn release(self: *Mutex) void {
@@ -185,7 +207,7 @@ pub const Mutex = struct {
 
         if (waiter) |w| {
             w.acquired = is_fair;
-            w.event.set();
+            w.parker.unpark();
         }
     }
 };

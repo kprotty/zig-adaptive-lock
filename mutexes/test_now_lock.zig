@@ -1,34 +1,21 @@
-// Copyright (c) 2020 kprotty
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// 	http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-
 const std = @import("std");
+const nanotime = @import("./nanotime.zig").nanotime;
 const Parker = @import("../v2/parker.zig").OsParker;
 
 pub const Mutex = struct {
-    pub const NAME = "word_lock";
+    pub const NAME = "test_now_lock";
 
     const UNLOCKED = 0;
     const LOCKED = 1 << 0;
-    const WAKING = 1 << 1;
-    const WAITING = ~@as(usize, 0b11);
+    const WAITING = ~@as(usize, LOCKED);
 
     const Waiter = struct {
         prev: ?*Waiter align((~WAITING) + 1),
         next: ?*Waiter,
         tail: ?*Waiter,
         parker: Parker,
+        acquired: bool,
+        started: u64,
     };
 
     state: usize = UNLOCKED,
@@ -73,6 +60,7 @@ pub const Mutex = struct {
         defer waiter.parker.deinit();
 
         var spin: u4 = 0;
+        var has_started = false;
         var state = @atomicLoad(usize, &self.state, .Monotonic);
 
         while (true) {
@@ -83,13 +71,7 @@ pub const Mutex = struct {
                 new_state |= LOCKED;
 
             } else if (head == null and spin <= 10) {
-                if (spin <= 3) {
-                    std.SpinLock.loopHint(@as(usize, 1) << spin);
-                } else if (std.builtin.os.tag == .windows) {
-                    std.os.windows.kernel32.Sleep(0);
-                } else {
-                    std.os.sched_yield() catch unreachable;
-                }
+                std.SpinLock.loopHint(@as(usize, 1) << spin);
                 spin += 1;
                 state = @atomicLoad(usize, &self.state, .Monotonic);
                 continue;
@@ -99,7 +81,12 @@ pub const Mutex = struct {
                 waiter.next = head;
                 waiter.tail = if (head == null) &waiter else null;
                 new_state = (new_state & ~WAITING) | @ptrToInt(&waiter);
+
                 waiter.parker.prepare();
+                if (!has_started) {
+                    has_started = true;
+                    waiter.started = nanotime();
+                }
             }
 
             if (@cmpxchgWeak(
@@ -118,33 +105,32 @@ pub const Mutex = struct {
                 break;
 
             waiter.parker.park();
+            if (waiter.acquired)
+                break;
+
             spin = 0;
             state = @atomicLoad(usize, &self.state, .Monotonic);
         }
     }
 
     pub fn release(self: *Mutex) void {
-        const state = @atomicRmw(usize, &self.state, .Sub, LOCKED, .Release);
-        if (state != UNLOCKED)
+        if (@cmpxchgStrong(
+            usize,
+            &self.state,
+            LOCKED,
+            UNLOCKED,
+            .Release,
+            .Monotonic,
+        ) != null) {
             self.releaseSlow();
+        }
     }
 
     fn releaseSlow(self: *Mutex) void {
         @setCold(true);
 
-        var state = @atomicLoad(usize, &self.state, .Monotonic);
-        while (true) {
-            if ((state & WAITING == 0) or (state & (LOCKED | WAKING) != 0))
-                return;
-            state = @cmpxchgWeak(
-                usize,
-                &self.state,
-                state,
-                state | WAKING,
-                .Acquire,
-                .Monotonic,
-            ) orelse break;
-        }
+        var release_at: ?u64 = null;
+        var state = @atomicLoad(usize, &self.state, .Acquire);
 
         while (true) {
             const head = @intToPtr(*Waiter, state & WAITING);
@@ -161,27 +147,30 @@ pub const Mutex = struct {
                 }
             };
 
-            if (state & LOCKED != 0) {
-                state = @cmpxchgWeak(
-                    usize,
-                    &self.state,
-                    state,
-                    state & ~@as(usize, WAKING),
-                    .AcqRel,
-                    .Acquire,
-                ) orelse return;
-                continue;
-            }
+            const is_fair = blk: {
+                const released = release_at orelse r: {
+                    const now = nanotime();
+                    release_at = now;
+                    break :r now;
+                };
+
+                var timeout = @as(u64, @ptrToInt(tail) >> 3);
+                timeout %= 500 * std.time.ns_per_us;
+                timeout += 500 * std.time.ns_per_us;
+                break :blk (released > (tail.started + timeout));
+            };
 
             if (tail.prev) |new_tail| {
                 head.tail = new_tail;
-                _ = @atomicRmw(usize, &self.state, .And, ~@as(usize, WAKING), .Release);
+                if (!is_fair) {
+                    _ = @atomicRmw(usize, &self.state, .And, ~@as(usize, LOCKED), .Release);
+                }
 
             } else if (@cmpxchgWeak(
                 usize,
                 &self.state,
                 state,
-                UNLOCKED,
+                @as(usize, if (is_fair) LOCKED else UNLOCKED),
                 .AcqRel,
                 .Acquire,
             )) |updated_state| {
@@ -189,8 +178,10 @@ pub const Mutex = struct {
                 continue;
             }
 
+            tail.acquired = is_fair;
             tail.parker.unpark();
             return;
         }
     }
 };
+
