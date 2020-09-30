@@ -1,10 +1,28 @@
+
+// Copyright (c) 2020 kprotty
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 const std = @import("std");
-const Instant = @import("./instant.zig");
+const sync = @import("./sync.zig");
+
+const print = std.debug.warn;
+const nanotime = sync.nanotime;
 const allocator = if (std.builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator;
 
 fn benchAll(b: Benchmarker) !void {
     try benchLock(b, "spin");
-    try benchLock(b, "os");
+    // try benchLock(b, "os");
 }
 
 fn benchLock(b: Benchmarker, comptime lock_name: []const u8) !void {
@@ -12,7 +30,7 @@ fn benchLock(b: Benchmarker, comptime lock_name: []const u8) !void {
 }
 
 fn help() void {
-    std.debug.log("{}", .{
+    print("{}", .{
         \\Usage: zig run bench.zig [measure] [threads] [locked] [unlocked]
         \\
         \\where:
@@ -51,7 +69,7 @@ pub fn main() !void {
     parse(&args, &threads, false, true) catch return help();
     parse(&args, &locked, true, false) catch return help();
     parse(&args, &unlocked, true, false) catch return help();
-    
+
     if (
         (measures.items.len == 0) or
         (threads.items.len == 0) or
@@ -62,6 +80,11 @@ pub fn main() !void {
     }
 
     const work_per_ns = WorkUnit.workPerNanosecond();
+    print("hello world {}\n", .{work_per_ns});
+}
+
+fn x() void {
+
     for (unlocked.items) |work_unlocked| {
         for (locked.items) |work_locked| {
             for (threads.items) |num_threads| {
@@ -73,16 +96,15 @@ pub fn main() !void {
                         .work_outside = work_unlocked.scaled(work_per_ns),
                     };
                     
-                    std.debug.log(
-                        "measure={} threads={} locked={} unlocked={}\n{}\n",
-                        "-" ** 50,
-                        measure.from,
+                    print("measure={} threads={} locked={} unlocked={}\n{}\n", .{
+                        Duration{ .value = measure },
                         b.num_threads,
                         b.work_inside,
                         b.work_outside,
-                    );
+                        "-" ** 50,
+                    });
 
-                    std.debug.log(BenchmarkResult{});
+                    print("{}", .{BenchmarkResult{}});
 
                     try benchAll(b);
                 }
@@ -131,7 +153,7 @@ fn parseValue(input: *[]const u8, comptime allow_time: bool) !u64 {
     
     var value: u64 = 0;
     var consumed: usize = 0;
-    while (buf.len > 0) : ({ buf = buf[1..]; consumed += 1 }) {
+    while (buf.len > 0) : ({ buf = buf[1..]; consumed += 1; }) {
         if (buf[0] < '0' or buf[0] > '9')
             break;
         value = (10 * value) + (buf[0] - '0');
@@ -146,7 +168,7 @@ fn parseValue(input: *[]const u8, comptime allow_time: bool) !u64 {
     if (buf.len == 0)
         return error.NoTimeUnit;
 
-    const mult = switch (buf[0]) {
+    const mult: u64 = switch (buf[0]) {
         'n' => 1,
         'u' => std.time.ns_per_us,
         'm' => std.time.ns_per_ms,
@@ -203,9 +225,14 @@ const Benchmarker = struct {
                 while (@atomicLoad(bool, running, .SeqCst)) {
 
                     const inside = info.wrk_inside.count(&prng);
-                    info.lock.acquire();
-                    WorkUnit.run(inside);
-                    info.lock.release();
+                    info.lock.withLock((struct {
+                        work_units: u64, 
+                        pub fn run(_ctx: @This()) void {
+                            WorkUnit.run(_ctx.work_units);
+                        }
+                    }){
+                        .work_units = info.wrk_inside.count(&prng),
+                    });
 
                     iters += 1;
                     if (!@atomicLoad(bool, running, .SeqCst))
@@ -247,16 +274,16 @@ const Benchmarker = struct {
 
         @atomicStore(bool, &is_running, false, .SeqCst);
         for (threads) |thread|
-            thread.join();
+            thread.wait();
 
         var mean: f64 = 0;
         for (results) |iters|
             mean += @intToFloat(f64, iters);
-        mean /= results.len;
+        mean /= @intToFloat(f64, results.len);
 
         var stdev: f64 = 0;
         for (results) |iters| {
-            const r = @intToFloat(f64, iters - mean);
+            const r = @intToFloat(f64, iters) - mean;
             stdev += r * r;
         }
         if (results.len > 1) {
@@ -264,10 +291,11 @@ const Benchmarker = struct {
             stdev = @sqrt(stdev);
         }
 
-        std.sort.sort(u64, results, {}, std.sort.asc(u64));
+        const cmp = comptime std.sort.asc(u64);
+        std.sort.sort(u64, results, {}, cmp);
         const median = @intToFloat(f64, results[results.len / 2]);
 
-        std.debug.log("{}", .{
+        print("{}", .{
             BenchmarkResult{
                 .name = Lock.name,
                 .mean = @floatToInt(u64, mean),
@@ -278,11 +306,11 @@ const Benchmarker = struct {
     }
 };
 
-const BenchmarkResult {
-    name: ?[]const u8,
-    mean: ?u64,
-    median: ?u64,
-    stdev: ?u64,
+const BenchmarkResult = struct {
+    name: ?[]const u8 = null,
+    mean: ?u64 = null,
+    median: ?u64 = null,
+    stdev: ?u64 = null,
 
     pub fn format(
         self: BenchmarkResult,
@@ -327,7 +355,7 @@ const WorkUnit = struct {
         };
     }
 
-    fn count(self: WorkUnit, prng: *u64) -> u64 {
+    fn count(self: WorkUnit, prng: *u64) u64 {
         const min = self.from;
         const max = self.to orelse return min;
         const rng = blk: {
@@ -342,7 +370,7 @@ const WorkUnit = struct {
     }
 
     fn run(iters: u64) void {
-        var i = iter;
+        var i = iters;
         while (i != 0) : (i -= 1) {
             work();
         }
@@ -361,20 +389,21 @@ const WorkUnit = struct {
         for (attempts) |*attempt| {
             attempt.* = compute: {
                 const timer_overhead = blk: {
-                    const start = Instant.now();
-                    _ = Instant.now();
-                    break :blk Instant.now() - start;
+                    const start = nanotime();
+                    _ = nanotime();
+                    break :blk nanotime() - start;
                 };
 
                 const num_steps = 10_000;
                 const ns = blk: {
-                    const start = Instant.now();
                     run(num_steps);
-                    break :blk Instant.now() - start;
+                    const start = nanotime();
+                    run(num_steps);
+                    break :blk nanotime() - start;
                 };
 
-                const elapsed = (ns - timer_overhead;
-                break :blk compute std.math.max(1, num_steps / elapsed);
+                const elapsed = ns - timer_overhead;
+                break :compute std.math.max(1, elapsed / num_steps);
             };
         }
 
@@ -414,7 +443,7 @@ const Duration = struct {
             try std.fmt.format(output, "{}µs", .{self.value / std.time.ns_per_us});
         } else if (self.value < std.time.ns_per_s) {
             try std.fmt.format(output, "{}ms", .{self.value / std.time.ns_per_ms});
-        } if (self.value) {
+        } else {
             try std.fmt.format(output, "{}s", .{self.value / std.time.ns_per_s});
         }
     }
