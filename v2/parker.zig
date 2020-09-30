@@ -41,10 +41,7 @@ pub const OsParker = extern struct {
 };
 
 const Os = switch (std.builtin.os.tag) {
-    .linux => switch (std.builtin.link_libc) {
-        true => Posix,
-        else => Linux,
-    },
+    .linux => Linux,
     .windows => Windows,
     .macosx,
     .watchos,
@@ -75,7 +72,7 @@ const Linux = struct {
         };
 
         pub fn init() Parker {
-            return undefined;
+            return Parker{ .state = .waiting };
         }
 
         pub fn deinit(self: *Parker) void {
