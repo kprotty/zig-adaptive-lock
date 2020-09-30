@@ -1,92 +1,42 @@
 const std = @import("std");
-const eql = std.mem.eql;
-const indexOf = std.mem.indexOf;
-const startsWith = std.mem.startsWith;
+const Instant = @import("./instant.zig");
 const allocator = if (std.builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator;
 
-/// Add mutexes to benchmark here
-fn benchMutexes(ctx: BenchContext) !void {
-    try bench(ctx, @import("./mutexes/parking_lot.zig").Mutex);
+fn benchAll(b: Benchmarker) !void {
+    try benchLock(b, "spin");
+    try benchLock(b, "os");
+}
 
-    // try bench(ctx, @import("./mutexes/test_now_lock.zig").Mutex);
-    try bench(ctx, @import("./mutexes/test_fair_lock.zig").Mutex);
-    try bench(ctx, @import("./mutexes/test_new_lock.zig").Mutex);
-
-    // try bench(ctx, @import("./mutexes/word_lock_waking.zig").Mutex);
-    try bench(ctx, @import("./mutexes/word_lock.zig").Mutex);
-
-    // try bench(ctx, @import("./mutexes/zap.zig").Mutex);
-    // try bench(ctx, @import("./mutexes/std.zig").Mutex);
-    try bench(ctx, @import("./mutexes/os.zig").Mutex);
-    try bench(ctx, @import("./mutexes/spin.zig").Mutex);
-    // try bench(ctx, @import("./mutexes/mcs.zig").Mutex);
+fn benchLock(b: Benchmarker, comptime lock_name: []const u8) !void {
+    try b.bench(@import("./locks/" ++ lock_name ++ ".zig").Lock);
 }
 
 fn help() void {
-    std.debug.warn("{}\n", .{
-        \\Usage: zig run bench.zig [command] [options]
+    std.debug.log("{}", .{
+        \\Usage: zig run bench.zig [measure] [threads] [locked] [unlocked]
         \\
-        \\Commands:
-        \\ throughput                  Measure overall system progress excluding individul thread progress (default)
-        \\ latency                     Measure avg time to acquire a mutex over all threads
-        \\ fairness                    Measure how even of a chance each thread has at lock acquisition
+        \\where:
+        \\ [measure]:  [csv-ranged:time]  \\ List of time spent measuring for each mutex benchmark
+        \\ [threads]:  [csv-ranged:count] \\ List of thread counts for each benchmark
+        \\ [locked]:   [csv-ranged:time]  \\ List of time spent inside the lock for each benchmark
+        \\ [unlocked]: [csv-ranged:time]  \\ List of time spent outside the lock for each benchmark
         \\
-        \\Options:
-        \\ -m/measure [time][units]    CSV list of time to measure each mutex during the benchmark
-        \\ -t/threads [num]/[from-to]  CSV list of single/range thread counts to use when benchmarking
-        \\ -l/locked [time][units]     CSV list of time to spend inside the critical section on each iteration in nanoseconds
-        \\ -u/unlocked [time][units]   CSV list of time to spend outside the critical section on each iteration in nanoseconds
+        \\where:
+        \\ [count]:     {usize}
+        \\ [time]:      {u128}[time_unit]
+        \\ [time_unit]: "ns" | "us" | "ms" | "s"
+        \\
+        \\ [csv_ranged:{rule}]: 
+        \\      | {rule}                                        \\ single value
+        \\      | {rule} "-" {rule}                             \\ randomized value in range
+        \\      | [csv_ranged:{rule}] "," [csv_ranged:{rule}]   \\ multiple permutations
+        \\
     });
 }
 
-const BenchContext = struct {
-    mode: enum {
-        Throughput,
-        Latency,
-        Fairness,
-    },
-    num_threads: usize,
-    work_locked: WorkUnit,
-    work_unlocked: WorkUnit,
-    measure_ns: u64,
-    loads_per_ns: u64,
-    timer_overhead: u64,
-
-    fn recordHeader(self: BenchContext) !void {
-        if (self.mode != .Throughput)
-            return;
-
-        var buffer: [128]u8 = undefined;
-        std.debug.warn("{}\n{}\n", .{
-            "-" ** 50,
-            try std.fmt.bufPrint(
-                buffer[0..],
-                "{s:20} | {s:14} | {s:14}",
-                .{"name", "average", "std. dev."},
-            ),
-        });
-    }
-
-    fn recordValue(self: BenchContext, args: anytype) !void {
-        if (self.mode != .Throughput)
-            return;
-            
-        var buffer: [128]u8 = undefined;
-        std.debug.warn("{}\n", .{
-            try std.fmt.bufPrint(
-                buffer[0..],
-                "{s:20} | {:14} | {:14}",
-                args,
-            ),
-        });
-    }
-};
-
 pub fn main() !void {
-    var ctx: BenchContext = undefined;
-
-    var measures = std.ArrayList(WorkUnit).init(allocator);
-    var threads = std.ArrayList(usize).init(allocator);
+    var measures = std.ArrayList(u64).init(allocator);
+    var threads = std.ArrayList(u64).init(allocator);
     var locked = std.ArrayList(WorkUnit).init(allocator);
     var unlocked = std.ArrayList(WorkUnit).init(allocator);
 
@@ -96,408 +46,376 @@ pub fn main() !void {
     defer unlocked.deinit();
 
     var args = std.process.args();
-    _ = try (args.next(allocator) orelse unreachable);
-    const mode = (args.next(allocator) orelse return help()) catch return help();
-    if (eql(u8, mode, "throughput")) {
-        ctx.mode = .Throughput;
-    } else if (eql(u8, mode, "latency")) {
-        ctx.mode = .Latency;
-    } else if (eql(u8, mode, "fairness")) {
-        ctx.mode = .Fairness;
-    } else {
+    _ = try (args.next(allocator) orelse return help());
+    parse(&args, &measures, true, true) catch return help();
+    parse(&args, &threads, false, true) catch return help();
+    parse(&args, &locked, true, false) catch return help();
+    parse(&args, &unlocked, true, false) catch return help();
+    
+    if (
+        (measures.items.len == 0) or
+        (threads.items.len == 0) or
+        (locked.items.len == 0) or
+        (unlocked.items.len == 0)
+    ) {
         return help();
     }
 
-    while (args.next(allocator)) |a| {
-        const arg = try a;
-        if (startsWith(u8, arg, "-m") or startsWith(u8, arg, "-measure") or startsWith(u8, arg, "--measure")) {
-            try parse(arg, &args, &measures, parseWorkUnit, addWorkUnits);
-        } else if (startsWith(u8, arg, "-t") or startsWith(u8, arg, "-threads") or startsWith(u8, arg, "--threads")) {
-            try parse(arg, &args, &threads, parseInt, addThreads);
-        } else if (startsWith(u8, arg, "-l") or startsWith(u8, arg, "-locked") or startsWith(u8, arg, "--locked")) {
-            try parse(arg, &args, &locked, parseWorkUnit, addWorkUnits);
-        } else if (startsWith(u8, arg, "-u") or startsWith(u8, arg, "-unlocked") or startsWith(u8, arg, "--unlocked")) {
-            try parse(arg, &args, &unlocked, parseWorkUnit, addWorkUnits);
-        } else {
-            std.debug.panic("Unknown argument: {}\n", .{arg});
-        }
-    }
-
-    if (measures.items.len == 0) {
-        try measures.append(WorkUnit {
-            .fromNs = 1 * std.time.ns_per_s,
-            .toNs = null,
-        });
-    }
-
-    if (locked.items.len == 0) {
-        try locked.append(WorkUnit{
-            .fromNs = 0,
-            .toNs = null,
-        });
-    }
-    if (unlocked.items.len == 0) {
-        try unlocked.append(WorkUnit{
-            .fromNs = 0,
-            .toNs = null,
-        });
-    }
-
-    if (threads.items.len == 0) {
-        const max_threads = try std.Thread.cpuCount();
-        try threads.append(max_threads * 2);
-        try threads.append(max_threads);
-        var stop = false;
-        var rest = max_threads / 2;
-        while (!stop and rest < max_threads) {
-            if (rest == 1) {
-                if (std.mem.indexOf(usize, threads.items, &[_]usize{2}) == null) {
-                    try threads.append(2);
-                }
-                stop = true;
-            }
-            try threads.append(rest);
-            rest /= 2;
-        }
-        var low: usize = 0;
-        var high: usize = threads.items.len - 1;
-        while (low < high) : ({ low += 1; high -= 1; }) {
-            const temp = threads.items[low];
-            threads.items[low] = threads.items[high];
-            threads.items[high] = temp;
-        }
-    }
-
-    var timer = try std.time.Timer.start();
-    ctx.timer_overhead = blk: {
-        const start = timer.read();
-        var result: u64 = undefined;
-        @ptrCast(*volatile u64, &result).* = timer.read();
-        const end = timer.read();
-        break :blk (end - start);
-    };
-
-    ctx.loads_per_ns = blk: {
-        const NUM_PAUSES = 10000;
-        const start = timer.read();
-        for (@as([NUM_PAUSES]void, undefined)) |_|
-            std.SpinLock.loopHint(1);
-        const end = timer.read();
-        const loads = (end - start) - ctx.timer_overhead;
-        break :blk std.math.max(NUM_PAUSES / loads, 1);
-    };
-
+    const work_per_ns = WorkUnit.workPerNanosecond();
     for (unlocked.items) |work_unlocked| {
         for (locked.items) |work_locked| {
             for (threads.items) |num_threads| {
                 for (measures.items) |measure| {
-                    ctx.num_threads = num_threads;
-                    ctx.work_locked = work_locked;
-                    ctx.work_unlocked = work_unlocked;
-                    ctx.measure_ns = measure.fromNs;
-
-                    measure.print("measure=");
-                    std.debug.warn(" threads={}", .{num_threads});
-                    work_locked.print(" locked=");
-                    work_unlocked.print(" unlocked=");
-                    std.debug.warn("\n", .{});
+                    var b = Benchmarker{
+                        .measure_time = measure,
+                        .num_threads = @intCast(usize, num_threads),
+                        .work_inside = work_locked.scaled(work_per_ns),
+                        .work_outside = work_unlocked.scaled(work_per_ns),
+                    };
                     
-                    try ctx.recordHeader();
-                    try benchMutexes(ctx);
-                    std.debug.warn("\n", .{});
+                    std.debug.log(
+                        "measure={} threads={} locked={} unlocked={}\n{}\n",
+                        "-" ** 50,
+                        measure.from,
+                        b.num_threads,
+                        b.work_inside,
+                        b.work_outside,
+                    );
+
+                    std.debug.log(BenchmarkResult{});
+
+                    try benchAll(b);
                 }
             }
         }
     }
 }
 
-fn bench(ctx: BenchContext, comptime Mutex: type) !void {
-    switch (ctx.mode) {
-        .Throughput => try benchThroughput(ctx, Mutex),
-        .Latency => try benchLatency(ctx, Mutex),
-        .Fairness => try benchFairness(ctx, Mutex),
-    }
-}
-
-fn benchThroughput(ctx: BenchContext, comptime Mutex: type) !void {
-    var results = try runBench(ctx, Mutex, struct {
-        const Self = @This();
-        iterations: usize,
-
-        fn init(self: *Self) void {
-            self.iterations = 0;
-        }
-
-        fn after_release(self: *Self) void {
-            self.iterations += 1;
-        }
-    });
-
-    defer results.deinit();
-    for (results.items) |*result| {
-        result.iterations /= std.math.max(1, ctx.measure_ns / std.time.ns_per_s);
-    }
-
-    const average = blk: {
-        var avg: f64 = 0;
-        for (results.items) |result| {
-            avg += @intToFloat(f64, result.iterations);
-        }
-        avg /= @intToFloat(f64, results.items.len);
-        break :blk @floatToInt(u64, avg);
-    };
-
-    const variance = blk: {
-        var stdev: f64 = 0;
-        for (results.items) |result| {
-            var r = @intToFloat(f64, result.iterations);
-            r -= @intToFloat(f64, average);
-            stdev += r * r;
-        }
-        if (results.items.len > 1) {
-            stdev /= @intToFloat(f64, results.items.len - 1);
-            stdev = @sqrt(stdev);
-        }
-        break :blk @floatToInt(u64, stdev);
-    };
-
-    try ctx.recordValue(.{Mutex.NAME, average, variance});
-}
-
-fn benchLatency(ctx: BenchContext, comptime Mutex: type) !void {
-    return error.NotImplementedYet;
-}
-
-fn benchFairness(ctx: BenchContext, comptime Mutex: type) !void {
-    return error.NotImplementedYet;
-}
-
-fn runBench(ctx: BenchContext, comptime Mutex: type, comptime WorkerContext: type) !std.ArrayList(WorkerContext) {
-    const Context = struct {
-        const Self = @This();
-
-        mutex: Mutex align(256) = undefined,
-        ctx: BenchContext,
-        event: std.ResetEvent = undefined,
-        contexes: std.ArrayList(WorkerContext) = undefined,
-        stop: bool = false,
-
-        const RunContext = struct {
-            self: *Self,
-            worker_context: *WorkerContext,
+fn parse(
+    args: *std.process.ArgIterator,
+    array_list: anytype,
+    comptime allow_time: bool,
+    comptime only_from: bool,
+) !void {
+    var input = try (args.next(allocator) orelse return error.Empty);
+    while (input.len > 0) {
+        const from = try parseValue(&input, allow_time);
+        const to = blk: {
+            if (input.len > 0 and input[0] == '-') {
+                input = input[1..];
+                const to = try parseValue(&input, allow_time);
+                break :blk to;
+            } else {
+                break :blk null;
+            }
         };
 
-        fn run(self: *Self) !void {
-            self.mutex.init();
-            defer self.mutex.deinit();
-            
-            self.event = std.ResetEvent.init();
-            defer self.event.deinit();
-
-            const threads = try allocator.alloc(*std.Thread, self.ctx.num_threads);
-            defer allocator.free(threads);
-
-            self.contexes = try std.ArrayList(WorkerContext).initCapacity(allocator, threads.len);
-            for (threads) |_|
-                try self.contexes.append(undefined);
-            errdefer self.contexes.deinit();
-
-            for (threads) |*t, i|
-                t.* = try std.Thread.spawn(RunContext{
-                    .self = self,
-                    .worker_context = &self.contexes.items[i],
-                }, worker);
-            self.event.set();
-            std.time.sleep(self.ctx.measure_ns);
-            @atomicStore(bool, &self.stop, true, .Monotonic);
-            for (threads) |t|
-                t.wait();
+        if (only_from) {
+            try array_list.append(from);
+        } else {
+            try array_list.append(WorkUnit{
+                .from = from,
+                .to = to,
+            });
         }
 
-        fn workLoads(work_unit: WorkUnit, rng: *u64, loads_per_ns: u64) u64 {
-            @setCold(true);
-            const min = work_unit.fromNs;
-            const max = work_unit.toNs orelse return min * loads_per_ns;
-            const rng_state = r: {
-                var x = rng.*;
-                x ^= x << 13;
-                x ^= x >> 7;
-                x ^= x << 17;
-                rng.* = x;
-                break :r x;
-            };
-            const loads = (rng_state % (max - min + 1)) + min;
-            return loads * loads_per_ns;
-        }
-
-        fn work(loads: u64) void {
-            var i = loads;
-            while (i != 0) : (i -= 1) {
-                std.SpinLock.loopHint(1);
-            }
-        }
-
-        fn worker(c: RunContext) void {
-            const self = c.self;
-            const worker_context = c.worker_context;
-            
-            const work_locked = self.ctx.work_locked;
-            const work_unlocked = self.ctx.work_unlocked;
-            const loads_per_ns = self.ctx.loads_per_ns;
-
-            var rng: u64 = @ptrToInt(self) ^ @ptrToInt(worker_context);
-            var work_locked_loads = workLoads(work_locked, &rng, loads_per_ns);
-            var work_unlocked_loads = workLoads(work_unlocked, &rng, loads_per_ns);
-            const refreshLocked = work_locked.toNs != null;
-            const refreshUnlocked = work_unlocked.toNs != null;
-
-            if (@hasDecl(WorkerContext, "init"))
-                worker_context.init();
-
-            self.event.wait();
-            while (!@atomicLoad(bool, &self.stop, .Monotonic)) {
-                if (refreshLocked)
-                    work_locked_loads = workLoads(work_locked, &rng, loads_per_ns);
-                if (refreshUnlocked)
-                    work_unlocked_loads = workLoads(work_unlocked, &rng, loads_per_ns);
-
-                if (@hasDecl(WorkerContext, "before_acquire"))
-                    worker_context.before_acquire();
-                self.mutex.acquire();
-                if (@hasDecl(WorkerContext, "after_acquire"))
-                    worker_context.after_acquire();
-
-                work(work_locked_loads);
-
-                if (@hasDecl(WorkerContext, "before_release"))
-                    worker_context.before_release();
-                self.mutex.release();
-                if (@hasDecl(WorkerContext, "after_release"))
-                    worker_context.after_release();
-
-                work(work_unlocked_loads);
-            }
-        }
-    };
-    
-    var context = Context{ .ctx = ctx };
-    try context.run();
-    return context.contexes;
+        if (input.len == 0 or input[0] != ',')
+            break;
+        input = input[1..];
+    }
 }
 
-const TimeUnit = struct {
-    value: u64,
-    unit: []const u8,
+fn parseValue(input: *[]const u8, comptime allow_time: bool) !u64 {
+    var buf = input.*;
+    defer input.* = buf;
+    
+    var value: u64 = 0;
+    var consumed: usize = 0;
+    while (buf.len > 0) : ({ buf = buf[1..]; consumed += 1 }) {
+        if (buf[0] < '0' or buf[0] > '9')
+            break;
+        value = (10 * value) + (buf[0] - '0');
+    }
+
+    if (consumed == 0)
+        return error.NoValue;
+
+    if (!allow_time)
+        return value;
+
+    if (buf.len == 0)
+        return error.NoTimeUnit;
+
+    const mult = switch (buf[0]) {
+        'n' => 1,
+        'u' => std.time.ns_per_us,
+        'm' => std.time.ns_per_ms,
+        's' => std.time.ns_per_s,
+        else => return error.InvalidTimeUnit,
+    };
+
+    buf = buf[1..];
+    if (mult != std.time.ns_per_s) {
+        if (buf.len == 0 or buf[0] != 's')
+            return error.InvalidTimeUnit;
+        buf = buf[1..];
+    }
+
+    return value * mult;
+}
+
+const Benchmarker = struct {
+    measure_time: u64,
+    num_threads: usize,
+    work_inside: WorkUnit,
+    work_outside: WorkUnit,
+
+    fn bench(self: Benchmarker, comptime Lock: type) !void {
+        const num_threads = self.num_threads;
+        const measure_time = self.measure_time;
+        const work_inside = self.work_inside;
+        const work_outside = self.work_outside;
+        
+        const Thread = struct {
+            const Info = struct {
+                lock: *Lock,
+                iters: *u64,
+                running: *bool,
+                event: *std.ResetEvent,
+                wrk_inside: WorkUnit,
+                wrk_outside: WorkUnit,
+            };
+
+            fn run(info: Info) void {
+                const iters_ptr = info.iters;
+                var iters: u64 = 0;
+                defer iters_ptr.* = iters;
+                
+                var prng = blk: {
+                    var stack: usize = 0;
+                    const ptr = @ptrToInt(&stack);
+                    break :blk @as(u64, ptr *% 31);
+                };
+
+                info.event.wait();
+
+                const running = info.running;
+                while (@atomicLoad(bool, running, .SeqCst)) {
+
+                    const inside = info.wrk_inside.count(&prng);
+                    info.lock.acquire();
+                    WorkUnit.run(inside);
+                    info.lock.release();
+
+                    iters += 1;
+                    if (!@atomicLoad(bool, running, .SeqCst))
+                        break;
+
+                    const outside = info.wrk_outside.count(&prng);
+                    WorkUnit.run(outside);
+                }
+            }
+        };
+
+        const threads = try allocator.alloc(*std.Thread, num_threads);
+        defer allocator.free(threads);
+
+        const results = try allocator.alloc(u64, num_threads);
+        defer allocator.free(results);
+
+        var is_running: bool = true;
+        var start_event = std.ResetEvent.init();
+        defer start_event.deinit();
+
+        var lock: Lock = undefined;
+        lock.init();
+        defer lock.deinit();
+
+        for (threads) |*thread, i| {
+            thread.* = try std.Thread.spawn(Thread.Info{
+                .lock = &lock,
+                .iters = &results[i],
+                .running = &is_running,
+                .event = &start_event,
+                .wrk_inside = work_inside,
+                .wrk_outside = work_outside,
+            }, Thread.run);
+        }
+
+        start_event.set();
+        std.time.sleep(measure_time);
+
+        @atomicStore(bool, &is_running, false, .SeqCst);
+        for (threads) |thread|
+            thread.join();
+
+        var mean: f64 = 0;
+        for (results) |iters|
+            mean += @intToFloat(f64, iters);
+        mean /= results.len;
+
+        var stdev: f64 = 0;
+        for (results) |iters| {
+            const r = @intToFloat(f64, iters - mean);
+            stdev += r * r;
+        }
+        if (results.len > 1) {
+            stdev /= @intToFloat(f64, results.len - 1);
+            stdev = @sqrt(stdev);
+        }
+
+        std.sort.sort(u64, results, {}, std.sort.asc(u64));
+        const median = @intToFloat(f64, results[results.len / 2]);
+
+        std.debug.log("{}", .{
+            BenchmarkResult{
+                .name = Lock.name,
+                .mean = @floatToInt(u64, mean),
+                .median = @floatToInt(u64, median),
+                .stdev = @floatToInt(u64, stdev),
+            },
+        });
+    }
 };
 
-fn getTimeUnit(ns: u64) TimeUnit {
-    var tu: TimeUnit = undefined;
-    if (ns < std.time.ns_per_us) {
-        tu.unit = "ns";
-        tu.value = ns;
-    } else if (ns < std.time.ns_per_ms) {
-        tu.unit = "us";
-        tu.value = ns / std.time.ns_per_us;
-    } else if (ns < std.time.ns_per_s) {
-        tu.unit = "ms";
-        tu.value = ns / std.time.ns_per_ms;
-    } else {
-        tu.unit = "s";
-        tu.value = ns / std.time.ns_per_s;
-    }
-    return tu;
-}
+const BenchmarkResult {
+    name: ?[]const u8,
+    mean: ?u64,
+    median: ?u64,
+    stdev: ?u64,
 
-fn parseInt(buf: []const u8) !usize {
-    return std.fmt.parseInt(usize, buf, 10) catch return error.ExpectedInteger;
-}
+    pub fn format(
+        self: BenchmarkResult,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        output: anytype,
+    ) !void {
+        if (self.name) |name| {
+            try std.fmt.format(output, "{s:<19} | ", .{name});
+        } else {
+            try std.fmt.format(output, "{s:<19} | ", .{"name"});
+        }
 
-fn addThreads(array: anytype, threadStart: anytype, threadEnd: ?@TypeOf(threadStart)) !void {
-    var start = threadStart;
-    const end = threadEnd orelse threadStart;
-    while (start <= end) : (start += 1) {
-        try array.append(start);
+        if (self.mean) |mean| {
+            try std.fmt.format(output, "{:>12} | ", .{mean});
+        } else {
+            try std.fmt.format(output, "{s:>12} | ", .{"average"});
+        }
+
+        if (self.median) |median| {
+            try std.fmt.format(output, "{:>11} | ", .{median});
+        } else {
+            try std.fmt.format(output, "{s:>11} | ", .{"median"});
+        }
+
+        if (self.stdev) |stdev| {
+            try std.fmt.format(output, "{:>10}", .{stdev});
+        } else {
+            try std.fmt.format(output, "{s:>10}", .{"std. dev."});
+        }
     }
-}
+};
 
 const WorkUnit = struct {
-    fromNs: u64,
-    toNs: ?u64,
+    from: u64,
+    to: ?u64,
 
-    fn print(self: WorkUnit, comptime header: anytype) void {
-        const from = getTimeUnit(self.fromNs);
-        std.debug.warn("{}{}{}", .{
-            header,
-            from.value,
-            from.unit,
-        });
-        if (self.toNs) |toNs| {
-            const to = getTimeUnit(toNs);
-            std.debug.warn("-{}{}", .{to.value, to.unit});
+    fn scaled(self: WorkUnit, div: u64) WorkUnit {
+        return WorkUnit{
+            .from = self.from / div,
+            .to = if (self.to) |t| t / div else null,
+        };
+    }
+
+    fn count(self: WorkUnit, prng: *u64) -> u64 {
+        const min = self.from;
+        const max = self.to orelse return min;
+        const rng = blk: {
+            var xs = prng.*;
+            xs ^= xs << 13;
+            xs ^= xs >> 7;
+            xs ^= xs << 17;
+            prng.* = xs;
+            break :blk xs;
+        };
+        return (rng % (max - min + 1)) + min;
+    }
+
+    fn run(iters: u64) void {
+        var i = iter;
+        while (i != 0) : (i -= 1) {
+            work();
+        }
+    }
+
+    fn work() void {
+        switch (std.builtin.arch) {
+            .i386, .x86_64 => asm volatile("pause" ::: "memory"),
+            .arm, .aarch64 => asm volatile("yield" ::: "memory"),
+            else => {},
+        }
+    }
+
+    fn workPerNanosecond() u64 {
+        var attempts: [10]u64 = undefined;
+        for (attempts) |*attempt| {
+            attempt.* = compute: {
+                const timer_overhead = blk: {
+                    const start = Instant.now();
+                    _ = Instant.now();
+                    break :blk Instant.now() - start;
+                };
+
+                const num_steps = 10_000;
+                const ns = blk: {
+                    const start = Instant.now();
+                    run(num_steps);
+                    break :blk Instant.now() - start;
+                };
+
+                const elapsed = (ns - timer_overhead;
+                break :blk compute std.math.max(1, num_steps / elapsed);
+            };
+        }
+
+        var sum: u64 = 0;
+        for (attempts) |attempt|
+            sum += attempt;
+        return sum / attempts.len;
+    }
+
+    pub fn format(
+        self: WorkUnit,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        output: anytype,
+    ) !void {
+        const from = Duration{ .value = self.from };
+        if (self.to) |to| {
+            try std.fmt.format(output, "rand({}, {})", .{Duration{ .value = to }, from});
+        } else {
+            try std.fmt.format(output, "{}", .{from});
         }
     }
 };
 
-fn parseWorkUnit(buf: []const u8) !u64 {
-    var end = indexOf(u8, buf, "s") orelse return error.UnexpectedTimeUnit;
-    const unit: u64 = switch (buf[end - 1]) {
-        'n' => b: { end -=1; break :b 1; },
-        'u' => b: { end -=1; break :b std.time.ns_per_us; },
-        'm' => b: { end -=1; break :b std.time.ns_per_ms; },
-        else => std.time.ns_per_s,
-    };
-    const time = std.fmt.parseInt(u64, buf[0..end], 10) catch return error.ExpectedTimeValue;
-    return time * unit;
-}
+const Duration = struct {
+    value: u64,
 
-fn addWorkUnits(array: anytype, start: u64, end: ?u64) !void {
-    if (end) |e| {
-        if (e < start)
-            return error.InvalidTimeRange;
+    pub fn format(
+        self: Duration,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        output: anytype,
+    ) !void {
+        if (self.value < std.time.ns_per_us) {
+            try std.fmt.format(output, "{}ns", .{self.value});
+        } else if (self.value < std.time.ns_per_ms) {
+            try std.fmt.format(output, "{}µs", .{self.value / std.time.ns_per_us});
+        } else if (self.value < std.time.ns_per_s) {
+            try std.fmt.format(output, "{}ms", .{self.value / std.time.ns_per_ms});
+        } if (self.value) {
+            try std.fmt.format(output, "{}s", .{self.value / std.time.ns_per_s});
+        }
     }
-
-    try array.append(WorkUnit{
-        .fromNs = start,
-        .toNs = end,
-    });
-}
-
-fn parse(arg: anytype, args: anytype, array: anytype, comptime parseFn: anytype, comptime add: anytype) !void {
-    var value = blk: {
-        if (indexOf(u8, arg, "=")) |idx| {
-            break :blk arg[idx + 1..];
-        } else {
-            const v = args.next(allocator) orelse return error.ExpectedArgument;
-            break :blk (try v);
-        }
-    };
-    while (value.len != 0) {
-        if (indexOf(u8, value, "-")) |idx| {
-            const len = blk: {
-                if (indexOf(u8, value[idx + 1..], ",")) |i| {
-                    break :blk (idx + 1 + i);
-                } else {
-                    break :blk value.len;
-                }
-            };
-            var start = try parseFn(value[0..idx]);
-            const end = try parseFn(value[idx + 1..len]);
-            try add(array, start, end);
-            if (len + 1 >= value.len)
-                break;
-            value = value[len + 1..];
-            continue;
-        }
-        if (indexOf(u8, value, ",")) |len| {
-            const item = try parseFn(value[0..len]);
-            try add(array, item, null);
-            if (len + 1 >= value.len)
-                break;
-            value = value[len + 1..];
-            continue;
-        }
-        const item = try parseFn(value);
-        try add(array, item, null);
-        break;
-    }
-}
+};

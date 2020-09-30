@@ -1,6 +1,8 @@
 const std = @import("std");
 
-pub const nanotime = Time.nanotime;
+pub fn now() u64 {
+    return Time.nanotime();
+}
 
 const Time = struct {
     fn nanotime() u64 {
