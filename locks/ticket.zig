@@ -17,7 +17,7 @@ const sync = @import("../sync.zig");
 const spinLoopHint = sync.spinLoopHint;
 
 pub const Lock = extern struct {
-    pub const name = "spin_lock";
+    pub const name = "ticket_lock";
 
     ticket: u16,
     owner: u16,
