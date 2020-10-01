@@ -26,3 +26,11 @@ pub fn spinLoopHint(iters: usize) void {
         }
     }
 }
+
+pub fn yield() void {
+    if (std.builtin.os.tag == .windows) {
+        std.os.windows.kernel32.Sleep(0);   
+    } else {
+        std.os.sched_yield() catch unreachable;
+    }
+}
