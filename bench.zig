@@ -14,7 +14,7 @@
 // limitations under the License.
 
 const std = @import("std");
-const sync = @import("./sync.zig");
+const sync = @import("./sync/sync.zig");
 
 const print = std.debug.warn;
 const nanotime = sync.nanotime;
@@ -22,6 +22,7 @@ const allocator = if (std.builtin.link_libc) std.heap.c_allocator else std.heap.
 
 fn benchAll(b: Benchmarker) !void {
     try benchLock(b, "spin");
+    try benchLock(b, "std");
     // try benchLock(b, "os");
 }
 
@@ -80,11 +81,6 @@ pub fn main() !void {
     }
 
     const work_per_ns = WorkUnit.workPerNanosecond();
-    print("hello world {}\n", .{work_per_ns});
-}
-
-fn x() void {
-
     for (unlocked.items) |work_unlocked| {
         for (locked.items) |work_locked| {
             for (threads.items) |num_threads| {
@@ -92,21 +88,24 @@ fn x() void {
                     var b = Benchmarker{
                         .measure_time = measure,
                         .num_threads = @intCast(usize, num_threads),
-                        .work_inside = work_locked.scaled(work_per_ns),
-                        .work_outside = work_unlocked.scaled(work_per_ns),
+                        .work_inside = work_locked,
+                        .work_outside = work_unlocked,
                     };
-                    
-                    print("measure={} threads={} locked={} unlocked={}\n{}\n", .{
-                        Duration{ .value = measure },
-                        b.num_threads,
-                        b.work_inside,
-                        b.work_outside,
-                        "-" ** 50,
-                    });
 
-                    print("{}", .{BenchmarkResult{}});
+                    print("measure=", .{});
+                    (Duration{ .value = measure }).fmtPrint();
+                    print(" threads={} locked=", .{num_threads});
+                    b.work_inside.fmtPrint();
+                    print(" unlocked=", .{});
+                    b.work_outside.fmtPrint();
+                    print("\n{}\n", .{"-" ** 75});
+                    (BenchmarkResult{}).fmtPrint();
+                    print("\n", .{});
 
+                    b.work_inside = b.work_inside.scaled(work_per_ns);
+                    b.work_outside = b.work_outside.scaled(work_per_ns);
                     try benchAll(b);
+                    print("\n", .{});
                 }
             }
         }
@@ -117,7 +116,7 @@ fn parse(
     args: *std.process.ArgIterator,
     array_list: anytype,
     comptime allow_time: bool,
-    comptime only_from: bool,
+    comptime is_ranged: bool,
 ) !void {
     var input = try (args.next(allocator) orelse return error.Empty);
     while (input.len > 0) {
@@ -132,9 +131,18 @@ fn parse(
             }
         };
 
-        if (only_from) {
-            try array_list.append(from);
+        if (is_ranged) {
+            const end = to orelse from;
+            var start = from;
+            while (start <= end) : (start += 1) {
+                try array_list.append(start);
+            }
         } else {
+            if (to) |_to| {
+                if (from > _to) {
+                    return error.InvalidRange;
+                }
+            }   
             try array_list.append(WorkUnit{
                 .from = from,
                 .to = to,
@@ -276,10 +284,10 @@ const Benchmarker = struct {
         for (threads) |thread|
             thread.wait();
 
-        var mean: f64 = 0;
+        var sum: f64 = 0;
         for (results) |iters|
-            mean += @intToFloat(f64, iters);
-        mean /= @intToFloat(f64, results.len);
+            sum += @intToFloat(f64, iters);
+        const mean = sum / @intToFloat(f64, results.len);
 
         var stdev: f64 = 0;
         for (results) |iters| {
@@ -293,54 +301,91 @@ const Benchmarker = struct {
 
         const cmp = comptime std.sort.asc(u64);
         std.sort.sort(u64, results, {}, cmp);
-        const median = @intToFloat(f64, results[results.len / 2]);
+        const min = results[0];
+        const max = results[results.len - 1];
 
-        print("{}", .{
-            BenchmarkResult{
-                .name = Lock.name,
-                .mean = @floatToInt(u64, mean),
-                .median = @floatToInt(u64, median),
-                .stdev = @floatToInt(u64, stdev),
-            },
-        });
+        (BenchmarkResult{
+            .name = Lock.name,
+            .mean = @floatToInt(u64, mean),
+            .stdev = @floatToInt(u64, stdev),
+            .min = min,
+            .max = max,
+            .sum = @floatToInt(u64, sum),
+        }).fmtPrint();
+        print("\n", .{});
     }
 };
 
 const BenchmarkResult = struct {
     name: ?[]const u8 = null,
     mean: ?u64 = null,
-    median: ?u64 = null,
     stdev: ?u64 = null,
+    min: ?u64 = null,
+    max: ?u64 = null,
+    sum: ?u64 = null,
 
-    pub fn format(
-        self: BenchmarkResult,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        output: anytype,
-    ) !void {
+    const name_align = "18";
+    const num_align = "8";
+    const val_align = "7";
+
+    pub fn fmtPrint(self: BenchmarkResult) void {
         if (self.name) |name| {
-            try std.fmt.format(output, "{s:<19} | ", .{name});
+            print("{s:<" ++ name_align ++ "}", .{name});
         } else {
-            try std.fmt.format(output, "{s:<19} | ", .{"name"});
+            print("{s:<" ++ name_align ++ "}", .{"name"});
         }
+        print(" | ", .{});
 
         if (self.mean) |mean| {
-            try std.fmt.format(output, "{:>12} | ", .{mean});
+            printNum(mean);
         } else {
-            try std.fmt.format(output, "{s:>12} | ", .{"average"});
+            print("{s:>" ++ num_align ++ "}", .{"mean"});
         }
-
-        if (self.median) |median| {
-            try std.fmt.format(output, "{:>11} | ", .{median});
-        } else {
-            try std.fmt.format(output, "{s:>11} | ", .{"median"});
-        }
+        print(" | ", .{});
 
         if (self.stdev) |stdev| {
-            try std.fmt.format(output, "{:>10}", .{stdev});
+            printNum(stdev);
         } else {
-            try std.fmt.format(output, "{s:>10}", .{"std. dev."});
+            print("{s:>" ++ num_align ++ "}", .{"stdev"});
         }
+        print(" | ", .{});
+
+        if (self.min) |min| {
+            printNum(min);
+        } else {
+            print("{s:>" ++ num_align ++ "}", .{"min"});
+        }
+        print(" | ", .{});
+
+        if (self.max) |max| {
+            printNum(max);
+        } else {
+            print("{s:>" ++ num_align ++ "}", .{"max"});
+        }
+        print(" | ", .{});
+
+        if (self.sum) |sum| {
+            printNum(sum);
+        } else {
+            print("{s:>" ++ num_align ++ "}", .{"sum"});
+        }
+        print(" |", .{});
+    }
+
+    fn printNum(num: u64) void {
+        if (num < 1000) {
+            print("{d:>" ++ num_align ++ ".0}", .{div(num, 1)});
+        } else if (num < 1_000_000) {
+            print("{d:>" ++ val_align ++ ".0}k", .{div(num, 1000)});
+        } else if (num < 1_000_000_000) {
+            print("{d:>" ++ val_align ++ ".2}m", .{div(num, 1_000_000)});
+        } else {
+            print("{d:>" ++ val_align ++ ".2}b", .{div(num, 1_000_000_000)});
+        }
+    }
+
+    fn div(num: u64, scale: f64) f64 {
+        return @intToFloat(f64, num) / scale;
     }
 };
 
@@ -413,17 +458,16 @@ const WorkUnit = struct {
         return sum / attempts.len;
     }
 
-    pub fn format(
-        self: WorkUnit,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        output: anytype,
-    ) !void {
+    pub fn fmtPrint(self: WorkUnit) void {
         const from = Duration{ .value = self.from };
         if (self.to) |to| {
-            try std.fmt.format(output, "rand({}, {})", .{Duration{ .value = to }, from});
+            print("rand(", .{});
+            from.fmtPrint();
+            print(", ", .{});
+            (Duration{ .value = to }).fmtPrint();
+            print(")", .{});
         } else {
-            try std.fmt.format(output, "{}", .{from});
+            from.fmtPrint();
         }
     }
 };
@@ -431,20 +475,15 @@ const WorkUnit = struct {
 const Duration = struct {
     value: u64,
 
-    pub fn format(
-        self: Duration,
-        comptime fmt: []const u8,
-        options: std.fmt.FormatOptions,
-        output: anytype,
-    ) !void {
+    pub fn fmtPrint(self: Duration) void {
         if (self.value < std.time.ns_per_us) {
-            try std.fmt.format(output, "{}ns", .{self.value});
+            print("{}ns", .{self.value});
         } else if (self.value < std.time.ns_per_ms) {
-            try std.fmt.format(output, "{}µs", .{self.value / std.time.ns_per_us});
+            print("{}us", .{self.value / std.time.ns_per_us});
         } else if (self.value < std.time.ns_per_s) {
-            try std.fmt.format(output, "{}ms", .{self.value / std.time.ns_per_ms});
+            print("{}ms", .{self.value / std.time.ns_per_ms});
         } else {
-            try std.fmt.format(output, "{}s", .{self.value / std.time.ns_per_s});
+            print("{}s", .{self.value / std.time.ns_per_s});
         }
     }
 };

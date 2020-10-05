@@ -14,7 +14,7 @@
 
 const std = @import("std");
 
-pub const nanotime = @import("./sync/instant.zig").timestamp;
+pub const nanotime = @import("./instant.zig").timestamp;
 
 pub fn spinLoopHint(iters: usize) void {
     var i = iters;

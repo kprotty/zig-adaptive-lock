@@ -14,7 +14,7 @@
 
 const std = @import("std");
 
-pub const Lock = extern struct {
+pub const Lock = struct {
     pub const name = "std.Mutex";
 
     mutex: std.Mutex,
