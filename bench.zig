@@ -22,9 +22,9 @@ const allocator = if (std.builtin.link_libc) std.heap.c_allocator else std.heap.
 
 fn benchAll(b: Benchmarker) !void {
     try benchLock(b, "spin");
+    try benchLock(b, "os");
     try benchLock(b, "std");
     try benchLock(b, "word");
-    // try benchLock(b, "os");
 }
 
 fn benchLock(b: Benchmarker, comptime lock_name: []const u8) !void {

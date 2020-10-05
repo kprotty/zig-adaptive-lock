@@ -65,12 +65,12 @@ const Windows = extern struct {
     }
 
     pub fn wait(self: *Windows) void {
+        defer @atomicStore(State, &self.state, .empty, .Monotonic);
         switch (@atomicRmw(State, &self.state, .Xchg, .waiting, .Acquire)) {
             .empty => self.block(),
             .waiting => unreachable, // multiple waiters on the same event
             .notified => {},
         }
-        @atomicStore(State, &self.state, .empty, .Monotonic);
     }
 
     pub fn notify(self: *Windows) void {
@@ -172,4 +172,69 @@ const Windows = extern struct {
         Alertable: windows.BOOLEAN,
         Timeout: ?*windows.LARGE_INTEGER,
     ) callconv(.Stdcall) windows.NTSTATUS;
+};
+
+const Posix = extern struct {
+    updated: bool,
+    cond: pthread_t,
+    mutex: pthread_t,
+
+    pub fn init(self: *Posix) void {
+        self.updated = false;
+        _ = pthread_cond_init(&self.cond, 0);
+        _ = pthread_mutex_init(&self.mutex, 0);
+    }
+
+    pub fn deinit(self: *Posix) void {
+        _ = pthread_cond_destroy(&self.cond);
+        _ = pthread_mutex_destroy(&self.mutex);
+    }
+
+    pub fn wait(self: *Posix) void {
+        _ = pthread_mutex_lock(&self.mutex);
+        defer _ = pthread_mutex_unlock(&self.mutex);
+
+        if (self.updated) {
+            self.updated = false;
+            return;
+        }
+
+        self.updated = true;
+        while (self.updated) {
+            _ = pthread_cond_wait(&self.cond, &self.mutex);
+        }
+    }
+
+    pub fn notify(self: *Posix) void {
+        const wake = blk: {
+            _ = pthread_mutex_lock(&self.mutex);
+            defer _ = pthread_mutex_unlock(&self.mutex);
+            
+            if (self.updated) {
+                self.updated = false;
+                break :blk true;
+            }
+
+            self.updated = true;
+            break :blk false;
+        };
+
+        if (wake) {
+            _ = pthread_cond_signal(&self.cond);
+        }
+    }
+
+    const pthread_t = extern struct {
+        _opaque: [64]u8 align(16),
+    };
+
+    extern "c" fn pthread_cond_init(p: *pthread_t, a: usize) callconv(.C) c_int;
+    extern "c" fn pthread_cond_destroy(p: *pthread_t) callconv(.C) c_int;
+    extern "c" fn pthread_cond_signal(p: *pthread_t) callconv(.C) c_int;
+    extern "c" fn pthread_cond_wait(noalias p: *pthread_t, noalias m: *pthread_t) callconv(.C) c_int;
+
+    extern "c" fn pthread_mutex_init(p: *pthread_t, a: usize) callconv(.C) c_int;
+    extern "c" fn pthread_mutex_destroy(p: *pthread_t) callconv(.C) c_int;
+    extern "c" fn pthread_mutex_lock(p: *pthread_t) callconv(.C) c_int;
+    extern "c" fn pthread_mutex_unlock(p: *pthread_t) callconv(.C) c_int;
 };
