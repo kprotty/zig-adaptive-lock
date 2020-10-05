@@ -27,7 +27,7 @@ pub const Lock = extern struct {
         next: ?*Waiter align(~WAITING + 1),
         prev: ?*Waiter,
         tail: ?*Waiter,
-        waker: *sync.Waker,
+        waker: sync.Waker,
     };
 
     state: usize,
@@ -59,92 +59,81 @@ pub const Lock = extern struct {
         }
     }
 
-    fn acquireSlow(self: *Lock, comptime Continuation: type) void {
+    fn acquireSlow(this_lock: *Lock, comptime Continuation: type) void {
         @setCold(true);
 
-        const ContinuationWaker = struct {
-            is_init: bool,
-            waker: sync.Waker,
+        const Future = struct {
+            lock: *Lock,
+            acquired: bool,
+            waiter: Waiter,
             continuation: Continuation,
 
             fn wake(waker: *sync.Waker) void {
-                const continuation_waker = @fieldParentPtr(@This(), "waker", waker);
-                continuation_waker.continuation.unblock();
-            }
-        };
-
-        var continuation_waker: ContinuationWaker = undefined;
-        continuation_waker.is_init = false;
-        defer if (continuation_waker.is_init) {
-            continuation_waker.continuation.deinit();
-        };
-
-        var waiter: Waiter = undefined;
-        var spin: std.math.Log2Int(usize) = 0;
-        var state = @atomicLoad(usize, &self.state, .Monotonic);
-
-        while (true) {
-            if (state & LOCKED == 0) {
-                state = @cmpxchgWeak(
-                    usize,
-                    &self.state,
-                    state,
-                    state | LOCKED,
-                    .Acquire,
-                    .Monotonic,
-                ) orelse break;
-                continue;
+                const waiter = @fieldParentPtr(Waiter, "waker", waker);
+                const self = @fieldParentPtr(@This(), "waiter", waiter);
+                self.continuation.unblock();
             }
 
-            const head = @intToPtr(?*Waiter, state & WAITING);
-            if (head == null and spin < 10) {
-                spin += 1;
-                sync.spinLoopHint(@as(usize, 1) << spin);
-                state = @atomicLoad(usize, &self.state, .Monotonic);
-                continue;
-            }
+            pub fn shouldBlock(self: *@This(), _continuation: *Continuation) bool {
+                const max_spin = switch (std.builtin.os.tag) {
+                    .windows => 10,
+                    else => 5,
+                };
+                
+                var spin: std.math.Log2Int(usize) = 0;
+                var state = @atomicLoad(usize, &self.lock.state, .Monotonic);
 
-            waiter.prev = null;
-            waiter.next = head;
-            waiter.tail = if (head == null) &waiter else null;
-            waiter.waker = &continuation_waker.waker;
+                while (true) {
+                    var new_state: usize = undefined;
 
-            if (!continuation_waker.is_init) {
-                continuation_waker.is_init = true;
-                continuation_waker.continuation.init();
-                continuation_waker.waker = sync.Waker{ .wakeFn = ContinuationWaker.wake };
-            }
+                    if (state & LOCKED == 0) {
+                        new_state = state | LOCKED;
+                    } else {
+                        const head = @intToPtr(?*Waiter, state & WAITING);
+                        if (head == null and spin < max_spin) {
+                            spin += 1;
+                            sync.spinLoopHint(@as(usize, 1) << spin);
+                            state = @atomicLoad(usize, &self.lock.state, .Monotonic);
+                            continue;
+                        }
 
-            continuation_waker.continuation.block((struct {
-                state_ptr: *usize,
-                state: usize,
-                new_state: usize,
+                        self.waiter.prev = null;
+                        self.waiter.next = head;
+                        self.waiter.tail = if (head == null) &self.waiter else null;
+                        self.waiter.waker = sync.Waker{ .wakeFn = @This().wake };
+                        new_state = (state & ~WAITING) | @ptrToInt(&self.waiter);
+                    }
 
-                pub fn shouldBlock(this: @This(), _continuation: *Continuation) bool {
-                    return @cmpxchgWeak(
+                    state = @cmpxchgWeak(
                         usize,
-                        this.state_ptr,
-                        this.state,
-                        this.new_state,
-                        .Release,
+                        &self.lock.state,
+                        state,
+                        new_state,
+                        .AcqRel,
                         .Monotonic,
-                    ) == null;
+                    ) orelse {
+                        self.acquired = state & LOCKED == 0;
+                        return !self.acquired;
+                    };
                 }
-            }){
-                .state_ptr = &self.state,
-                .state = state,
-                .new_state = (state & ~WAITING) | @ptrToInt(&waiter),
-            });
+            }
+        };
 
-            spin = 0;
-            sync.spinLoopHint(1);
-            state = @atomicLoad(usize, &self.state, .Monotonic);
+        var future: Future = undefined;
+        future.continuation.init();
+        defer future.continuation.deinit();
+
+        future.lock = this_lock;
+        future.acquired = false;
+
+        while (!future.acquired) {
+            future.continuation.block(&future);
         }
     }
 
     fn release(self: *Lock) void {
         const state = @atomicRmw(usize, &self.state, .Sub, LOCKED, .Release);
-        if (state != LOCKED) {
+        if ((state & WAKING == 0) and (state & WAITING != 0)) {
             self.releaseSlow();
         }
     }
