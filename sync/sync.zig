@@ -16,6 +16,16 @@ const std = @import("std");
 
 pub const nanotime = @import("./instant.zig").timestamp;
 
+pub const OsContinuation = @import("./os_continuation.zig").Continuation;
+
+pub const Waker = struct {
+    wakeFn: fn (*Waker) void,
+
+    pub fn wake(self: *Waker) void {
+        return (self.wakeFn)(self);
+    }
+};
+
 pub fn spinLoopHint(iters: usize) void {
     var i = iters;
     while (i != 0) : (i -= 1) {
