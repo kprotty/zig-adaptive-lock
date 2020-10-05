@@ -36,7 +36,7 @@ const is_posix = switch (std.builtin.os.tag) {
     else => false,
 };
 
-pub const Continuation = 
+pub const Event = 
     if (std.builtin.os.tag == .windows)
         Windows
     else if (std.builtin.link_libc and is_posix)
@@ -48,57 +48,72 @@ pub const Continuation =
 
 const Windows = extern struct {
     const windows = std.os.windows;
+    const State = extern enum(u32) {
+        empty,
+        waiting,
+        notified,
+    };
 
-    is_waiting: bool align(4),
+    state: State,
 
     pub fn init(self: *Windows) void {
-        self.* = undefined;
+        self.state = .empty;
     }
 
     pub fn deinit(self: *Windows) void {
         self.* = undefined;
     }
 
-    pub fn block(self: *Windows, caller: anytype) void {
-        self.is_waiting = true;
-
-        if (!caller.shouldBlock(self)) {
-            return;
+    pub fn wait(self: *Windows) void {
+        switch (@atomicRmw(State, &self.state, .Xchg, .waiting, .Acquire)) {
+            .empty => self.block(),
+            .waiting => unreachable, // multiple waiters on the same event
+            .notified => {},
         }
+        @atomicStore(State, &self.state, .empty, .Monotonic);
+    }
 
+    pub fn notify(self: *Windows) void {
+        switch (@atomicRmw(State, &self.state, .Xchg, .notified, .Acquire)) {
+            .empty => {},
+            .waiting => self.unblock(),
+            .notified => unreachable, // multiple notifications on the same event
+        }
+    }
+
+    fn block(self: *Windows) void {
+        @setCold(true);
         const handle = getHandle() orelse {
-            while (@atomicLoad(bool, &self.is_waiting, .Acquire))
+            while (@atomicLoad(State, &self.state, .Acquire) == .waiting)
                 sync.spinLoopHint(1);
             return;
         };
 
-        const key = @ptrCast(*align(4) const c_void, &self.is_waiting);
+        const key = @ptrCast(*align(4) const c_void, &self.state);
         const status = NtWaitForKeyedEvent(handle, key, windows.FALSE, null);
         std.debug.assert(status == .SUCCESS);
     }
 
-    pub fn unblock(self: *Windows) void {
-        const handle = getHandle() orelse {
-            @atomicStore(bool, &self.is_waiting, false, .Release);
-            return;
-        };
+    fn unblock(self: *Windows) void {
+        @setCold(true);
+        const handle = getHandle() orelse return;
 
-        const key = @ptrCast(*align(4) const c_void, &self.is_waiting);
+        const key = @ptrCast(*align(4) const c_void, &self.state);
         const status = NtReleaseKeyedEvent(handle, key, windows.FALSE, null);
         std.debug.assert(status == .SUCCESS);
     }
 
-    var event_state = State.uninit;
+    var event_state = EventState.uninit;
     var event_handle: ?windows.HANDLE = undefined;
 
-    const State = enum(u8) {
+    const EventState = enum(u8) {
         uninit,
         initing,
         init,
     };
 
     fn getHandle() ?windows.HANDLE {
-        if (@atomicLoad(State, &event_state, .Acquire) == .init)
+        if (@atomicLoad(EventState, &event_state, .Acquire) == .init)
             return event_handle;
         return getHandleSlow();
     }
@@ -106,12 +121,12 @@ const Windows = extern struct {
     fn getHandleSlow() ?windows.HANDLE {
         @setCold(true);
 
-        var state = @atomicLoad(State, &event_state, .Acquire);
+        var state = @atomicLoad(EventState, &event_state, .Acquire);
         while (true) {
             switch (state) {
                 .uninit => {
                     state = @cmpxchgWeak(
-                        State,
+                        EventState,
                         &event_state,
                         .uninit,
                         .initing,
@@ -121,7 +136,7 @@ const Windows = extern struct {
                 },
                 .initing => {
                     windows.kernel32.Sleep(0);
-                    state = @atomicLoad(State, &event_state, .Acquire);
+                    state = @atomicLoad(EventState, &event_state, .Acquire);
                 },
                 .init => {
                     return event_handle;
@@ -133,7 +148,7 @@ const Windows = extern struct {
         if (NtCreateKeyedEvent(&event_handle, access_mask, null, 0) != .SUCCESS)
             event_handle = null;
         
-        @atomicStore(State, &event_state, .init, .Release);
+        @atomicStore(EventState, &event_state, .init, .Release);
         return event_handle;
     }
 

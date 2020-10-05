@@ -41,12 +41,12 @@ pub const Lock = extern struct {
     }
 
     pub fn withLock(self: *Lock, context: anytype) void {
-        self.acquire(sync.OsContinuation);
+        self.acquire(sync.Event);
         context.run();
         self.release();
     }
 
-    fn acquire(self: *Lock, comptime Continuation: type) void {
+    fn acquire(self: *Lock, comptime Event: type) void {
         if (@cmpxchgWeak(
             usize,
             &self.state,
@@ -55,79 +55,82 @@ pub const Lock = extern struct {
             .Acquire,
             .Monotonic,
         )) |_| {
-            self.acquireSlow(Continuation);
+            self.acquireSlow(Event);
         }
     }
 
-    fn acquireSlow(this_lock: *Lock, comptime Continuation: type) void {
+    fn acquireSlow(self: *Lock, comptime Event: type) void {
         @setCold(true);
 
-        const Future = struct {
-            lock: *Lock,
-            acquired: bool,
+        const EventWaiter = struct {
+            event: Event,
             waiter: Waiter,
-            continuation: Continuation,
 
             fn wake(waker: *sync.Waker) void {
                 const waiter = @fieldParentPtr(Waiter, "waker", waker);
-                const self = @fieldParentPtr(@This(), "waiter", waiter);
-                self.continuation.unblock();
+                const this = @fieldParentPtr(@This(), "waiter", waiter);
+                this.event.notify();
             }
+        };
 
-            pub fn shouldBlock(self: *@This(), _continuation: *Continuation) bool {
+        var has_event = false;
+        var ev: EventWaiter = undefined;
+        defer if (has_event) {
+            ev.event.deinit();
+        };
+        
+        var spin: std.math.Log2Int(usize) = 0;
+        var state = @atomicLoad(usize, &self.state, .Monotonic);
+        while (true) {
+
+            var new_state: usize = undefined;
+            if (state & LOCKED == 0) {
+                new_state = state | LOCKED;
+
+            } else {
+                const head = @intToPtr(?*Waiter, state & WAITING);
                 const max_spin = switch (std.builtin.os.tag) {
                     .windows => 10,
                     else => 5,
                 };
-                
-                var spin: std.math.Log2Int(usize) = 0;
-                var state = @atomicLoad(usize, &self.lock.state, .Monotonic);
 
-                while (true) {
-                    var new_state: usize = undefined;
-
-                    if (state & LOCKED == 0) {
-                        new_state = state | LOCKED;
-                    } else {
-                        const head = @intToPtr(?*Waiter, state & WAITING);
-                        if (head == null and spin < max_spin) {
-                            spin += 1;
-                            sync.spinLoopHint(@as(usize, 1) << spin);
-                            state = @atomicLoad(usize, &self.lock.state, .Monotonic);
-                            continue;
-                        }
-
-                        self.waiter.prev = null;
-                        self.waiter.next = head;
-                        self.waiter.tail = if (head == null) &self.waiter else null;
-                        self.waiter.waker = sync.Waker{ .wakeFn = @This().wake };
-                        new_state = (state & ~WAITING) | @ptrToInt(&self.waiter);
-                    }
-
-                    state = @cmpxchgWeak(
-                        usize,
-                        &self.lock.state,
-                        state,
-                        new_state,
-                        .AcqRel,
-                        .Monotonic,
-                    ) orelse {
-                        self.acquired = state & LOCKED == 0;
-                        return !self.acquired;
-                    };
+                if (head == null and spin < max_spin) {
+                    spin += 1;
+                    sync.spinLoopHint(@as(usize, 1) << spin);
+                    state = @atomicLoad(usize, &self.state, .Monotonic);
+                    continue;
                 }
+
+                if (!has_event) {
+                    has_event = true;
+                    ev.event.init();
+                    ev.waiter.waker = sync.Waker{ .wakeFn = EventWaiter.wake };
+                }
+
+                ev.waiter.prev = null;
+                ev.waiter.next = head;
+                ev.waiter.tail = if (head == null) &ev.waiter else null;
+                new_state = (state & ~WAITING) | @ptrToInt(&ev.waiter);
             }
-        };
 
-        var future: Future = undefined;
-        future.continuation.init();
-        defer future.continuation.deinit();
+            if (@cmpxchgWeak(
+                usize,
+                &self.state,
+                state,
+                new_state,
+                .AcqRel,
+                .Monotonic,
+            )) |updated_state| {
+                state = updated_state;
+                continue;
+            }
 
-        future.lock = this_lock;
-        future.acquired = false;
+            if (state & LOCKED == 0)
+                break;
 
-        while (!future.acquired) {
-            future.continuation.block(&future);
+            ev.event.wait();
+            spin = 0;
+            state = @atomicLoad(usize, &self.state, .Monotonic);
         }
     }
 

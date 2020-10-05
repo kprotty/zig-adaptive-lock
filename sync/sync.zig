@@ -16,7 +16,7 @@ const std = @import("std");
 
 pub const nanotime = @import("./instant.zig").timestamp;
 
-pub const OsContinuation = @import("./os_continuation.zig").Continuation;
+pub const Event = @import("./event.zig").Event;
 
 pub const Waker = struct {
     wakeFn: fn (*Waker) void,
