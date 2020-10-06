@@ -24,20 +24,11 @@ fn print(comptime fmt: []const u8, args: anytype) void {
     if (std.builtin.os.tag != .windows)
         return std.debug.print(fmt, args);
 
-    const WindowsWriter = struct {
-        const windows = std.os.windows;
-        pub const Error = error{};
-        pub fn writeAll(self: @This(), _bytes: []const u8) Error!void {
-            var bytes = _bytes;
-            const stderr = windows.GetStdHandle(windows.STD_ERROR_HANDLE) catch unreachable;
-            while (bytes.len != 0) {
-                var written = @intCast(windows.DWORD, bytes.len);
-                _ = windows.kernel32.WriteFile(stderr, bytes.ptr, written, &written, null);
-                bytes = bytes[written..];
-            }
-        }
-    };
-    std.fmt.format(WindowsWriter{}, fmt, args) catch unreachable;
+    const Static = struct { var lock = std.SpinLock.init(); };
+    const held = Static.lock.acquire();
+    defer held.release();
+
+    nosuspend std.io.getStdErr().writer().print(fmt, args) catch return;
 }
 
 fn benchAll(b: Benchmarker) !void {
@@ -45,6 +36,9 @@ fn benchAll(b: Benchmarker) !void {
     try benchLock(b, "os");
     try benchLock(b, "futex");
     try benchLock(b, "word");
+
+    try benchLock(b, "parking_lot");
+    // try benchLock(b, "test_new_lock");
 }
 
 fn benchLock(b: Benchmarker, comptime lock_name: []const u8) !void {

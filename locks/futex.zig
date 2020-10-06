@@ -95,13 +95,13 @@ pub const Lock = struct {
     }
 };
 
-const Futex = switch (std.builtin.os.tag) {
+pub const Futex = switch (std.builtin.os.tag) {
     .windows => Windows,
     .linux => Linux,
     else => Posix,
 };
 
-const Windows = struct {
+const Windows = extern struct {
     const windows = std.os.windows;
 
     pub fn init(self: *Futex) void {}

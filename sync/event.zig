@@ -46,7 +46,56 @@ pub const Event =
     else
         @compileError("OS not supported");
 
-const Windows = extern struct {
+const Windows = struct {
+    const windows = std.os.windows;
+
+    state: bool align(@alignOf(usize)),
+
+    pub fn init(self: *Windows) void {
+        self.state = false;
+    }
+
+    pub fn deinit(self: *Windows) void {
+        self.* = undefined;
+    }
+
+    var event_handle: ?windows.HANDLE = null;
+
+    pub fn wait(self: *Windows) void {
+        if (!@atomicRmw(bool, &self.state, .Xchg, true, .Acquire)) {
+            const handle = @ptrCast(*volatile const ?windows.HANDLE, &event_handle).*;
+            const key = @ptrCast(*align(@alignOf(usize)) const c_void, &self.state);
+            const status = NtWaitForKeyedEvent(handle, key, windows.FALSE, null);
+            std.debug.assert(status == .SUCCESS);
+        }
+        self.state = false;
+    }
+
+    pub fn notify(self: *Windows) void {
+        if (@atomicRmw(bool, &self.state, .Xchg, true, .Release)) {
+            const handle = @ptrCast(*volatile const ?windows.HANDLE, &event_handle).*;
+            const key = @ptrCast(*align(@alignOf(usize)) const c_void, &self.state);
+            const status = NtReleaseKeyedEvent(handle, key, windows.FALSE, null);
+            std.debug.assert(status == .SUCCESS);
+        }
+    }
+
+    extern "NtDll" fn NtWaitForKeyedEvent(
+        EventHandle: ?windows.HANDLE,
+        Key: *align(@alignOf(usize)) const c_void,
+        Alertable: windows.BOOLEAN,
+        Timeout: ?*windows.LARGE_INTEGER,
+    ) callconv(.Stdcall) windows.NTSTATUS;
+
+    extern "NtDll" fn NtReleaseKeyedEvent(
+        EventHandle: ?windows.HANDLE,
+        Key: *align(@alignOf(usize)) const c_void,
+        Alertable: windows.BOOLEAN,
+        Timeout: ?*windows.LARGE_INTEGER,
+    ) callconv(.Stdcall) windows.NTSTATUS;
+};
+
+const _Windows = extern struct {
     const windows = std.os.windows;
     
     state: bool align(@alignOf(usize)),
