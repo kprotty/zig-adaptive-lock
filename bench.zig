@@ -16,15 +16,34 @@
 const std = @import("std");
 const sync = @import("./sync/sync.zig");
 
-const print = std.debug.warn;
 const nanotime = sync.nanotime;
 const allocator = if (std.builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator;
+
+/// Custom print function as theres a race condition in the current std.Mutex impl for windows
+fn print(comptime fmt: []const u8, args: anytype) void {
+    if (std.builtin.os.tag != .windows)
+        return std.debug.print(fmt, args);
+
+    const WindowsWriter = struct {
+        const windows = std.os.windows;
+        pub const Error = error{};
+        pub fn writeAll(self: @This(), _bytes: []const u8) Error!void {
+            var bytes = _bytes;
+            const stderr = windows.GetStdHandle(windows.STD_ERROR_HANDLE) catch unreachable;
+            while (bytes.len != 0) {
+                var written = @intCast(windows.DWORD, bytes.len);
+                _ = windows.kernel32.WriteFile(stderr, bytes.ptr, written, &written, null);
+                bytes = bytes[written..];
+            }
+        }
+    };
+    std.fmt.format(WindowsWriter{}, fmt, args) catch unreachable;
+}
 
 fn benchAll(b: Benchmarker) !void {
     try benchLock(b, "spin");
     try benchLock(b, "os");
     try benchLock(b, "futex");
-    try benchLock(b, "std");
     try benchLock(b, "word");
 }
 

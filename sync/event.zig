@@ -48,16 +48,11 @@ pub const Event =
 
 const Windows = extern struct {
     const windows = std.os.windows;
-    const State = extern enum(u32) {
-        empty,
-        waiting,
-        notified,
-    };
-
-    state: State,
+    
+    state: bool align(@alignOf(usize)),
 
     pub fn init(self: *Windows) void {
-        self.state = .empty;
+        self.state = false;
     }
 
     pub fn deinit(self: *Windows) void {
@@ -65,40 +60,31 @@ const Windows = extern struct {
     }
 
     pub fn wait(self: *Windows) void {
-        defer @atomicStore(State, &self.state, .empty, .Monotonic);
-        switch (@atomicRmw(State, &self.state, .Xchg, .waiting, .Acquire)) {
-            .empty => self.block(),
-            .waiting => unreachable, // multiple waiters on the same event
-            .notified => {},
+        if (!@atomicRmw(bool, &self.state, .Xchg, true, .Acquire)) {
+            self.block();
         }
+        std.debug.assert(self.state);
+        self.state = false;
     }
 
     pub fn notify(self: *Windows) void {
-        switch (@atomicRmw(State, &self.state, .Xchg, .notified, .Acquire)) {
-            .empty => {},
-            .waiting => self.unblock(),
-            .notified => unreachable, // multiple notifications on the same event
+        if (@atomicRmw(bool, &self.state, .Xchg, true, .Release)) {
+            self.unblock();
         }
     }
 
     fn block(self: *Windows) void {
         @setCold(true);
-        const handle = getHandle() orelse {
-            while (@atomicLoad(State, &self.state, .Acquire) == .waiting)
-                sync.spinLoopHint(1);
-            return;
-        };
-
-        const key = @ptrCast(*align(4) const c_void, &self.state);
+        const handle = getHandle() orelse unreachable;
+        const key = @ptrCast(*align(@alignOf(usize)) const c_void, &self.state);
         const status = NtWaitForKeyedEvent(handle, key, windows.FALSE, null);
         std.debug.assert(status == .SUCCESS);
     }
 
     fn unblock(self: *Windows) void {
         @setCold(true);
-        const handle = getHandle() orelse return;
-
-        const key = @ptrCast(*align(4) const c_void, &self.state);
+        const handle = getHandle() orelse unreachable;
+        const key = @ptrCast(*align(@alignOf(usize)) const c_void, &self.state);
         const status = NtReleaseKeyedEvent(handle, key, windows.FALSE, null);
         std.debug.assert(status == .SUCCESS);
     }
@@ -161,14 +147,14 @@ const Windows = extern struct {
 
     extern "NtDll" fn NtWaitForKeyedEvent(
         EventHandle: ?windows.HANDLE,
-        Key: *align(4) const c_void,
+        Key: *align(@alignOf(usize)) const c_void,
         Alertable: windows.BOOLEAN,
         Timeout: ?*windows.LARGE_INTEGER,
     ) callconv(.Stdcall) windows.NTSTATUS;
 
     extern "NtDll" fn NtReleaseKeyedEvent(
         EventHandle: ?windows.HANDLE,
-        Key: *align(4) const c_void,
+        Key: *align(@alignOf(usize)) const c_void,
         Alertable: windows.BOOLEAN,
         Timeout: ?*windows.LARGE_INTEGER,
     ) callconv(.Stdcall) windows.NTSTATUS;
