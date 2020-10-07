@@ -13,7 +13,7 @@
 // limitations under the License.
 
 const std = @import("std");
-const sync = @import("../sync.zig");
+const sync = @import("../sync/sync.zig");
 const spinLoopHint = sync.spinLoopHint;
 
 pub const Lock = extern struct {

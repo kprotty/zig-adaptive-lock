@@ -1,3 +1,17 @@
+// Copyright (c) 2020 kprotty
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 const std = @import("std");
 
 pub fn timestamp() u64 {
@@ -45,7 +59,7 @@ fn nanotime64() u64 {
     }
 }
 
-const Os = 
+pub const Os = 
     if (std.builtin.os.tag == .windows)
         struct {
             pub const is_monotonic = false;
@@ -68,7 +82,7 @@ const Os =
                 return f;
             }
 
-            fn nanotime() u64 {
+            pub fn nanotime() u64 {
                 const c = std.os.windows.QueryPerformanceCounter();
                 return (c *% std.time.ns_per_s) / getFreq();
             }
@@ -81,7 +95,7 @@ const Os =
                 .arch == .s390x
             ));
 
-            fn nanotime() u64 {
+            pub fn nanotime() u64 {
                 var ts: std.os.timespec = undefined;
                 std.os.clock_gettime(std.os.CLOCK_MONOTONIC, &ts) catch unreachable;
                 return @intCast(u64, ts.tv_sec) * std.time.ns_per_s + @intCast(u64, ts.tv_nsec);
@@ -110,7 +124,7 @@ const Os =
                 return f;
             }
 
-            fn nanotime() u64 {
+            pub fn nanotime() u64 {
                 const f = getFreq();
                 const c = std.os.darwin.mach_absolute_time();
                 return (c *% f.numer) / f.denom;
