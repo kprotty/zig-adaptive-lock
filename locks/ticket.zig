@@ -16,16 +16,17 @@ const std = @import("std");
 const utils = @import("../utils.zig");
 
 pub const Lock = extern struct {
-    pub const name = "spin_lock";
+    pub const name = "ticket_lock";
 
-    locked: bool = false,
+    ticket: u16 = 0,
+    owner: u16 = 0,
 
     pub fn acquire(self: *Lock) void {
-        var locked = false;
         var spin: std.math.Log2Int(usize) = 0;
+        const ticket = @atomicRmw(u16, &self.ticket, .Add, 1, .Monotonic);
 
         while (true) {
-            if (!locked and !@atomicRmw(bool, &self.locked, .Xchg, true, .Acquire))
+            if (@atomicLoad(u16, &self.owner, .Acquire) == ticket)
                 return;
 
             if (spin < 5) {
@@ -34,12 +35,10 @@ pub const Lock = extern struct {
             } else {
                 utils.yieldThread(1);
             }
-
-            locked = @atomicLoad(bool, &self.locked, .Monotonic);
         }
     }
 
     pub fn release(self: *Lock) void {
-        @atomicStore(bool, &self.locked, false, .Release);
+        @atomicStore(u16, &self.owner, self.owner +% 1, .Release);
     }
 };
