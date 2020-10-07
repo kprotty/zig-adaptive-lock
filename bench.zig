@@ -13,7 +13,6 @@
 // limitations under the License.
 
 const std = @import("std");
-const print = std.debug.print;
 
 const locks = .{
     // "spin",
@@ -45,28 +44,98 @@ fn help() void {
     });
 }
 
+// Circumvent going through std.debug.print
+// as when theres a segfault that happens while std.debug.stderr_mutex is being held,
+// then the panic handler will try and grab the mutex again which will result in a dead-lock.
+fn print(comptime fmt: []const u8, args: anytype) void {
+    nosuspend std.io.getStdErr().writer().print(fmt, args) catch return;
+}
+
 pub fn main() !void {
     // use an arena allocator for all future allocations
     const base_allocator = if (std.builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator;
     var arena = std.heap.ArenaAllocator.init(base_allocator);
+    defer arena.deinit();
     const allocator = &arena.allocator;
-
-    // we need a larger stack than what the os provides due to zig's inlining...
-    const stack_size = 128 * 1024 * 1024;
-    const alignment = @alignOf(@Frame(benchmark));
-    const stack = try allocator.allocWithOptions(u8, stack_size, alignment, null);
-    defer allocator.free(stack);
-
-    var result: @typeInfo(@TypeOf(benchmark)).Fn.return_type.? = undefined;
-    const frame = @asyncCall(stack, &result, benchmark, .{allocator});
-    try (nosuspend await frame);
+    try Stack.run(allocator);
 }
 
-fn benchmark(allocator: *std.mem.Allocator) callconv(.Async) !void {
+const Stack = switch (std.builtin.os.tag) {
+    .windows => struct {
+        const windows = std.os.windows;
+        const FIBER_FLAG_FLOAT_SWITCH = 0x1;
+
+        extern "kernel32" fn ConvertThreadToFiber(
+            arg: ?windows.PVOID,
+        ) callconv(.Stdcall) ?windows.PVOID;
+
+        extern "kernel32" fn SwitchToFiber(
+            fiber: ?windows.PVOID,
+        ) callconv(.Stdcall) void;
+
+        extern "kernel32" fn DeleteFiber(
+            fiber: ?windows.PVOID,
+        ) callconv(.Stdcall) void;
+
+        extern "kernel32" fn CreateFiberEx(
+            dwStackCommitSize: windows.SIZE_T,
+            dwStackReserveSize: windows.SIZE_T,
+            dwFlags: windows.DWORD,
+            lpStartAddress: usize,
+            lpParameter: ?windows.PVOID,
+        ) callconv(.Stdcall) ?windows.PVOID;
+
+        const Info = struct {
+            allocator: *std.mem.Allocator,
+            fiber: ?windows.PVOID,
+            result: @typeInfo(@TypeOf(benchmark)).Fn.return_type.?,
+        };
+
+        fn run(allocator: *std.mem.Allocator) !void {
+            var info = Info{
+                .allocator = allocator,
+                .fiber = ConvertThreadToFiber(null) orelse unreachable,
+                .result = undefined,
+            };
+
+            const fiber = CreateFiberEx(
+                256 * 1024 * 1024,
+                256 * 1024 * 1024,
+                FIBER_FLAG_FLOAT_SWITCH,
+                @ptrToInt(wrapper),
+                @ptrCast(windows.PVOID, &info),
+            ) orelse unreachable;
+            SwitchToFiber(fiber);
+            DeleteFiber(fiber);
+
+            return info.result;
+        }
+
+        fn wrapper(arg: windows.PVOID) callconv(.C) void {
+            const info = @ptrCast(*Info, @alignCast(@alignOf(Info), arg));
+            info.result = benchmark(info.allocator);
+            SwitchToFiber(info.fiber);
+        }
+    },
+    else => struct {
+        fn run(allocator: *std.mem.Allocator) !void {
+            try benchmark(allocator);
+        }
+    },
+};
+
+fn benchmark(allocator: *std.mem.Allocator) !void {
     var measures = std.ArrayList(Duration).init(allocator);
+    defer measures.deinit();
+
     var threads = std.ArrayList(usize).init(allocator);
+    defer threads.deinit();
+
     var locked = std.ArrayList(WorkUnit).init(allocator);
+    defer locked.deinit();
+
     var unlocked = std.ArrayList(WorkUnit).init(allocator);
+    defer unlocked.deinit();
 
     var args = std.process.args();
     _ = try (args.next(allocator) orelse unreachable);
@@ -75,31 +144,7 @@ fn benchmark(allocator: *std.mem.Allocator) callconv(.Async) !void {
     Parser.parse(allocator, &args, &locked, Parser.toWorkUnit) catch return help(); 
     Parser.parse(allocator, &args, &unlocked, Parser.toWorkUnit) catch return help();
 
-    const nanos_per_work_unit = blk: {
-        var timer = try std.time.Timer.start();
-        
-        var attempts: [10]u64 = undefined;
-        for (attempts) |*attempt| {
-            const timer_start = timer.read();
-            _ = timer.read();
-            const timer_overhead = timer.read() - timer_start;
-
-            const num_works = 10_000;
-            WorkUnit.run(num_works);
-            const work_start = timer.read();
-            WorkUnit.run(num_works);
-            const work_overhead = timer.read() - work_start;
-
-            const elapsed = work_overhead - timer_overhead;
-            const ns_per_work = elapsed / num_works;
-            attempt.* = std.math.max(1, ns_per_work); 
-        }
-
-        var sum: u64 = 0;
-        for (attempts) |attempt|
-            sum += attempt;
-        break :blk sum / attempts.len;
-    };
+    const nanos_per_work_unit = try WorkUnit.nanosPerUnit();
 
     for (unlocked.items) |work_unlocked| {
         for (locked.items) |work_locked| {
@@ -118,13 +163,14 @@ fn benchmark(allocator: *std.mem.Allocator) callconv(.Async) !void {
 
                     inline for (locks) |lock| {
                         const Lock = @import("./locks/" ++ lock ++ ".zig").Lock;
-                        try bench(Lock, BenchConfig{
+                        const result = try bench(Lock, BenchConfig{
                             .allocator = allocator,
                             .num_threads = num_threads,
                             .measure = measure,
                             .work_locked = work_locked.scaled(nanos_per_work_unit),
                             .work_unlocked = work_unlocked.scaled(nanos_per_work_unit),
                         });
+                        print("{}\n", .{result});
                     }
 
                     print("\n", .{});
@@ -142,7 +188,7 @@ const BenchConfig = struct {
     work_unlocked: WorkUnit,
 };
 
-fn bench(comptime Lock: type, config: BenchConfig) !void {
+fn bench(comptime Lock: type, config: BenchConfig) !Result {
     const Context = struct {
         lock: Lock,
         event: std.ResetEvent align(512),
@@ -190,32 +236,31 @@ fn bench(comptime Lock: type, config: BenchConfig) !void {
         }
     };
 
-    var context = Context{
-        .lock = undefined,
-        .event = undefined,
-        .is_running = true,
-        .results = undefined,
-        .work_locked = config.work_locked,
-        .work_unlocked = config.work_unlocked,
-    };
-
-    context.lock.init();
-    defer context.lock.deinit();
-
-    context.event = std.ResetEvent.init();
-    defer context.event.deinit();
-
-    context.results = try config.allocator.alloc(f64, config.num_threads);
-    defer config.allocator.free(context.results);
-
+    const results = try config.allocator.alloc(f64, config.num_threads);
+    defer config.allocator.free(results);
+    
     {
+        const context = try config.allocator.create(Context);
+        defer config.allocator.destroy(context);
+
+        context.is_running = true;
+        context.results = results;
+        context.work_locked = config.work_locked;
+        context.work_unlocked = config.work_unlocked;
+
+        context.lock.init();
+        defer context.lock.deinit();
+
+        context.event = std.ResetEvent.init();
+        defer context.event.deinit();
+
         const threads = try config.allocator.alloc(*std.Thread, config.num_threads);
         defer config.allocator.free(threads);
 
         for (threads) |*thread, index| {
             thread.* = try std.Thread.spawn(
                 Context.RunInfo{
-                    .context = &context,
+                    .context = context,
                     .index = index,
                 },
                 Context.run,
@@ -232,7 +277,6 @@ fn bench(comptime Lock: type, config: BenchConfig) !void {
     }
 
     var sum: f64 = 0;
-    const results = context.results;
     for (results) |lock_operations|
         sum += lock_operations;
     const mean = sum / @intToFloat(f64, results.len);
@@ -251,7 +295,7 @@ fn bench(comptime Lock: type, config: BenchConfig) !void {
     const min = results[0];
     const max = results[results.len - 1];
 
-    const result = Result{
+    return Result{
         .name = Lock.name,
         .mean = mean,
         .stdev = stdev,
@@ -259,7 +303,6 @@ fn bench(comptime Lock: type, config: BenchConfig) !void {
         .max = max,
         .sum = sum,
     };
-    print("{}\n", .{result});
 }
 
 const Parser = struct {
@@ -430,6 +473,32 @@ const Result = struct {
 const WorkUnit = struct {
     from: u64,
     to: ?u64,
+
+    fn nanosPerUnit() !u64 {
+        var timer = try std.time.Timer.start();
+        
+        var attempts: [10]u64 = undefined;
+        for (attempts) |*attempt| {
+            const timer_start = timer.read();
+            _ = timer.read();
+            const timer_overhead = timer.read() - timer_start;
+
+            const num_works = 10_000;
+            WorkUnit.run(num_works);
+            const work_start = timer.read();
+            WorkUnit.run(num_works);
+            const work_overhead = timer.read() - work_start;
+
+            const elapsed = work_overhead - timer_overhead;
+            const ns_per_work = elapsed / num_works;
+            attempt.* = std.math.max(1, ns_per_work); 
+        }
+
+        var sum: u64 = 0;
+        for (attempts) |attempt|
+            sum += attempt;
+        return sum / attempts.len;
+    }
 
     fn scaled(self: WorkUnit, div: u64) WorkUnit {
         return WorkUnit{

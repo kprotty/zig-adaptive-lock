@@ -79,6 +79,6 @@ pub const Lock =
             extern "c" fn pthread_mutex_unlock(p: *pthread_mutex_t) callconv(.C) c_int;
         }
     else if (utils.is_linux)
-        @compileError("TODO: implement linux OS lock")
+        @compileError("TODO: implement linux OS lock: https://akkadia.org/drepper/futex.pdf")
     else
         @compileError("OS does not provide a default lock");
