@@ -46,7 +46,40 @@ pub const Event =
     else
         @compileError("OS not supported");
 
-const Windows = struct {
+const Windows = e_Windows;
+
+const a_Windows = struct {
+    const windows = std.os.windows;
+
+    tid: windows.DWORD,
+
+    pub fn init(self: *Windows) void {
+        self.tid = windows.kernel32.GetCurrentThreadId();
+    }
+
+    pub fn deinit(self: *Windows) void {
+        self.* = undefined;
+    }
+
+    pub fn wait(self: *Windows) void {
+        _ = NtWaitForAlertByThreadId(0, null);
+    }
+
+    pub fn notify(self: *Windows) void {
+        _ = NtAlertThreadByThreadId(self.tid);
+    }
+
+    extern "NtDll" fn NtWaitForAlertByThreadId(
+        Address: usize,
+        Timeout: ?*windows.LARGE_INTEGER,
+    ) callconv(.Stdcall) windows.NTSTATUS;
+
+    extern "NtDll" fn NtAlertThreadByThreadId(
+        ThreadId: usize,
+    ) callconv(.Stdcall) windows.NTSTATUS;
+};
+
+const e_Windows = struct {
     const windows = std.os.windows;
 
     state: bool align(@alignOf(usize)),

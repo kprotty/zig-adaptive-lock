@@ -245,21 +245,11 @@ pub const Lock = struct {
                     self.counter += 1;
                     return true;
                 },
-                .linux => {
-                    if (self.counter > 10)
-                        return false;
-                    if (self.counter <= 3) {
-                        sync.spinLoopHint(@as(usize, 1) << self.counter);
-                    } else {
-                        std.os.sched_yield() catch unreachable;
-                    }
-                    self.counter += 1;
-                    return true;
-                },
                 else => {
-                    if (self.counter >= 40)
+                    if (self.counter > 5)
                         return false;
-                    std.os.sched_yield() catch unreachable;
+                    // std.os.sched_yield() catch unreachable;
+                    sync.spinLoopHint(31);
                     self.counter += 1;
                     return true;
                 },
@@ -293,6 +283,19 @@ pub const Lock = struct {
 
                 fn unlock(self: *WordLock) void {
                     ReleaseSRWLockExclusive(&self.srwlock);
+                }
+            }
+        else if (std.builtin.os.tag == .windows)
+            struct {
+                const Inner = @import("./test_new_lock.zig").Lock;
+                inner: Inner = Inner{ .state = 0 },
+
+                fn lock(self: *WordLock) void {
+                    self.inner.acquire();
+                }
+
+                fn unlock(self: *WordLock) void {
+                    self.inner.release();
                 }
             }
         else

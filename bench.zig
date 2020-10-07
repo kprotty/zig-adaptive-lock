@@ -37,8 +37,8 @@ fn benchAll(b: Benchmarker) !void {
     try benchLock(b, "futex");
     try benchLock(b, "word");
 
+    try benchLock(b, "test_new_lock");
     try benchLock(b, "parking_lot");
-    // try benchLock(b, "test_new_lock");
 }
 
 fn benchLock(b: Benchmarker, comptime lock_name: []const u8) !void {

@@ -14,28 +14,26 @@
 
 const std = @import("std");
 const sync = @import("../sync/sync.zig");
-const Futex = @import("./futex.zig").Futex;
 
-pub const Lock = struct {
-    pub const name = "test_new_lock";
+pub const Lock = extern struct {
+    pub const name = "word_lock_waking";
+
+    const UNLOCKED = 0;
+    const LOCKED = 1;
+    const WAKING = 1 << 8;
+    const WAITING = ~@as(usize, (1 << 9) - 1);
+
+    const Waiter = struct {
+        next: ?*Waiter align(~WAITING + 1),
+        prev: ?*Waiter,
+        tail: ?*Waiter,
+        waker: sync.Waker,
+    };
 
     state: usize,
 
-    const UNLOCKED = 0;
-    const LOCKED = 1 << 0;
-    const WAITING = ~@as(usize, LOCKED);
-
-    const Waiter = struct {
-        prev: ?*Waiter align((~WAITING) + 1),
-        next: ?*Waiter,
-        tail: ?*Waiter,
-        event: sync.Event,
-        acquired: bool,
-        force_fair_at: u64,
-    };
-
     pub fn init(self: *Lock) void {
-        self.state = 0;
+        self.state = UNLOCKED;
     }
 
     pub fn deinit(self: *Lock) void {
@@ -43,77 +41,73 @@ pub const Lock = struct {
     }
 
     pub fn withLock(self: *Lock, context: anytype) void {
-        self.acquire();
+        self.acquire(sync.Event);
         context.run();
         self.release();
     }
 
-    fn acquire(self: *Lock) void {
-        const acquired = switch (std.builtin.arch) {
-            .i386, .x86_64 => asm volatile(
-                "lock btsl $0, %[ptr]"
-                : [ret] "={@ccc}" (-> u8),
-                : [ptr] "*m" (&self.state)
-                : "cc", "memory"
-            ) == 0,
-            else => @cmpxchgWeak(
-                usize,
-                &self.state,
-                UNLOCKED,
-                LOCKED,
-                .Acquire,
-                .Monotonic,
-            ) == null,
-        };
-
-        if (!acquired)
-            self.acquireSlow();
+    pub fn acquire(self: *Lock, comptime Event: type) void {
+        if (@atomicRmw(u8, @ptrCast(*u8, &self.state), .Xchg, LOCKED, .Acquire) != UNLOCKED) {
+            self.acquireSlow(Event);
+        }
     }
 
-    fn acquireSlow(self: *Lock) void {
+    fn acquireSlow(self: *Lock, comptime Event: type) void {
         @setCold(true);
 
-        var has_event = false;
-        var waiter: Waiter = undefined;
-        defer if (has_event) {
-            waiter.event.deinit();
+        const EventWaiter = struct {
+            event: Event,
+            waiter: Waiter,
+
+            fn wake(waker: *sync.Waker) void {
+                const waiter = @fieldParentPtr(Waiter, "waker", waker);
+                const this = @fieldParentPtr(@This(), "waiter", waiter);
+                this.event.notify();
+            }
         };
 
+        var has_event = false;
+        var ev: EventWaiter = undefined;
+        defer if (has_event) {
+            ev.event.deinit();
+        };
+        
+        var is_waiting = false;
         var spin: std.math.Log2Int(usize) = 0;
         var state = @atomicLoad(usize, &self.state, .Monotonic);
-
         while (true) {
-            var new_state = state;
-            const head = @intToPtr(?*Waiter, state & WAITING);
 
+            var new_state: usize = undefined;
             if (state & LOCKED == 0) {
-                new_state |= LOCKED;
-
-            } else if (head == null and spin < 10) {
-                std.SpinLock.loopHint(@as(usize, 1) << spin);
-                spin += 1;
-                state = @atomicLoad(usize, &self.state, .Monotonic);
-                continue;
+                new_state = state | LOCKED;
 
             } else {
-                waiter.prev = null;
-                waiter.next = head;
-                waiter.tail = if (head == null) &waiter else null;
-                new_state = (new_state & ~WAITING) | @ptrToInt(&waiter);
+                const head = @intToPtr(?*Waiter, state & WAITING);
+                if (head == null and spin < 40) {
+                    spin += 1;
+                    if (std.builtin.os.tag == .windows) {
+                        _ = std.os.windows.kernel32.SwitchToThread();
+                    } else {
+                        std.os.sched_yield() catch unreachable;
+                    }
+                    state = @atomicLoad(usize, &self.state, .Monotonic);
+                    continue;
+                }
 
                 if (!has_event) {
                     has_event = true;
-                    
-                    var timeout = @as(u64, @ptrToInt(head orelse &waiter));
-                    timeout = (13 *% timeout) ^ (timeout >> 15);
-                    timeout %= 500 * std.time.ns_per_us;
-                    timeout += 500 * std.time.ns_per_us;
-
-                    waiter.event.init();
-                    waiter.force_fair_at = sync.nanotime();
-                    waiter.force_fair_at += timeout;
+                    ev.event.init();
+                    ev.waiter.waker = sync.Waker{ .wakeFn = EventWaiter.wake };
                 }
+
+                ev.waiter.prev = null;
+                ev.waiter.next = head;
+                ev.waiter.tail = if (head == null) &ev.waiter else null;
+                new_state = (state & ~WAITING) | @ptrToInt(&ev.waiter);
             }
+
+            if (is_waiting)
+                new_state &= ~@as(usize, WAKING);
 
             if (@cmpxchgWeak(
                 usize,
@@ -130,25 +124,21 @@ pub const Lock = struct {
             if (state & LOCKED == 0)
                 break;
 
-            waiter.event.wait();
-            if (waiter.acquired) {
-                break;
-            }
-
-            spin = 0;
+            ev.event.wait();
+            // spin = 0;
+            _ = @atomicRmw(usize, &self.state, .And, ~@as(usize, WAKING), .Monotonic);// is_waiting = true;
             state = @atomicLoad(usize, &self.state, .Monotonic);
         }
     }
 
-    fn release(self: *Lock) void {
-        if (@cmpxchgStrong(
-            usize,
-            &self.state,
-            LOCKED,
-            UNLOCKED,
-            .Release,
-            .Monotonic,
-        ) != null) {
+    pub fn release(self: *Lock) void {
+        // const state = @atomicRmw(usize, &self.state, .Sub, LOCKED, .Release);
+        // if ((state & WAKING == 0) and (state & WAITING != 0)) {
+        //     self.releaseSlow();
+        // }
+        @atomicStore(u8, @ptrCast(*u8, &self.state), UNLOCKED, .Release);
+        const state = @atomicLoad(usize, &self.state, .Monotonic);
+        if ((state & (WAKING | LOCKED) == 0) and (state & WAITING != 0)) {
             self.releaseSlow();
         }
     }
@@ -156,9 +146,22 @@ pub const Lock = struct {
     fn releaseSlow(self: *Lock) void {
         @setCold(true);
 
-        var released_at: ?u64 = null;
-        var state = @atomicLoad(usize, &self.state, .Acquire);
+        var state = @atomicLoad(usize, &self.state, .Monotonic);
+        while (true) {
+            if ((state & (LOCKED | WAKING) != 0) or (state & WAITING == 0)) {
+                return;
+            }
+            state = @cmpxchgWeak(
+                usize,
+                &self.state,
+                state,
+                state | WAKING,
+                .Acquire,
+                .Monotonic,
+            ) orelse break;
+        }
 
+        state |= WAKING;
         while (true) {
             const head = @intToPtr(*Waiter, state & WAITING);
             const tail = head.tail orelse blk: {
@@ -174,33 +177,35 @@ pub const Lock = struct {
                 }
             };
 
-            const released = released_at orelse blk: {
-                released_at = sync.nanotime();
-                break :blk released_at.?;
-            };
-
-            const be_fair = released >= tail.force_fair_at;
+            if (state & LOCKED != 0) {
+                state = @cmpxchgWeak(
+                    usize,
+                    &self.state,
+                    state,
+                    state & ~@as(usize, WAKING),
+                    .Release,
+                    .Acquire,
+                ) orelse break;
+                continue;
+            }
 
             if (tail.prev) |new_tail| {
                 head.tail = new_tail;
-                if (!be_fair) {
-                    _ = @atomicRmw(usize, &self.state, .And, ~@as(usize, LOCKED), .Release);
-                }
+                @fence(.Release);
 
             } else if (@cmpxchgWeak(
                 usize,
                 &self.state,
                 state,
-                @as(usize, if (be_fair) LOCKED else UNLOCKED),
-                .AcqRel,
+                WAKING,
+                .Release,
                 .Acquire,
             )) |updated_state| {
                 state = updated_state;
                 continue;
             }
 
-            tail.acquired = be_fair;
-            tail.event.notify();
+            tail.waker.wake();
             return;
         }
     }
