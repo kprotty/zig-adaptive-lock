@@ -20,6 +20,14 @@ pub const Lock = extern struct {
 
     locked: bool = false,
 
+    pub fn init(self: *Lock) void {
+        self.* = Lock{};
+    }
+
+    pub fn deinit(self: *Lock) void {
+        self.* = undefined;
+    }
+
     pub fn acquire(self: *Lock) void {
         var locked = false;
         var spin: std.math.Log2Int(usize) = 0;

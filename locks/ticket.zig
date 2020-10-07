@@ -21,6 +21,14 @@ pub const Lock = extern struct {
     ticket: u16 = 0,
     owner: u16 = 0,
 
+    pub fn init(self: *Lock) void {
+        self.* = Lock{};
+    }
+
+    pub fn deinit(self: *Lock) void {
+        self.* = undefined;
+    }
+
     pub fn acquire(self: *Lock) void {
         var spin: std.math.Log2Int(usize) = 0;
         const ticket = @atomicRmw(u16, &self.ticket, .Add, 1, .Monotonic);

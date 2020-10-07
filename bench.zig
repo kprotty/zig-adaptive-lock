@@ -16,8 +16,10 @@ const std = @import("std");
 const print = std.debug.print;
 
 const locks = .{
+    // "spin",
+    // "ticket",
+    "os",
     "spin",
-    "ticket",
 };
 
 fn help() void {
@@ -50,7 +52,7 @@ pub fn main() !void {
     const allocator = &arena.allocator;
 
     // we need a larger stack than what the os provides due to zig's inlining...
-    const stack_size = 64 * 1024 * 1024;
+    const stack_size = 128 * 1024 * 1024;
     const alignment = @alignOf(@Frame(benchmark));
     const stack = try allocator.allocWithOptions(u8, stack_size, alignment, null);
     defer allocator.free(stack);
@@ -165,28 +167,40 @@ fn bench(comptime Lock: type, config: BenchConfig) !void {
             var prng = @as(u64, @ptrToInt(self) ^ @ptrToInt(result));
             self.event.wait();
 
-            while (@atomicLoad(bool, &self.is_running, .SeqCst)) {
-                const works_locked = self.work_locked.count(&prng);
-                const works_unlocked = self.work_unlocked.count(&prng);
+            const base_work_locked = self.work_locked;
+            const base_work_unlocked = self.work_unlocked;
 
+            var works_locked = base_work_locked.count(&prng);
+            var works_unlocked = base_work_unlocked.count(&prng);
+
+            while (@atomicLoad(bool, &self.is_running, .SeqCst)) {
                 self.lock.acquire();
                 WorkUnit.run(works_locked);
+                
                 self.lock.release();
+                WorkUnit.run(works_unlocked);
 
                 lock_operations += 1;
-                WorkUnit.run(works_unlocked);
+
+                if (lock_operations % 10_000 == 0) {
+                    works_locked = base_work_locked.count(&prng);
+                    works_unlocked = base_work_unlocked.count(&prng);
+                }
             }
         }
     };
 
     var context = Context{
-        .lock = Lock{},
+        .lock = undefined,
         .event = undefined,
         .is_running = true,
         .results = undefined,
         .work_locked = config.work_locked,
         .work_unlocked = config.work_unlocked,
     };
+
+    context.lock.init();
+    defer context.lock.deinit();
 
     context.event = std.ResetEvent.init();
     defer context.event.deinit();
