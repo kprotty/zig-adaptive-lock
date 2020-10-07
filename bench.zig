@@ -15,10 +15,9 @@
 const std = @import("std");
 
 const locks = .{
-    // "spin",
-    // "ticket",
-    "os",
     "spin",
+    "ticket",
+    "os",
 };
 
 fn help() void {
@@ -57,74 +56,7 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(base_allocator);
     defer arena.deinit();
     const allocator = &arena.allocator;
-    try Stack.run(allocator);
-}
 
-const Stack = switch (std.builtin.os.tag) {
-    .windows => struct {
-        const windows = std.os.windows;
-        const FIBER_FLAG_FLOAT_SWITCH = 0x1;
-
-        extern "kernel32" fn ConvertThreadToFiber(
-            arg: ?windows.PVOID,
-        ) callconv(.Stdcall) ?windows.PVOID;
-
-        extern "kernel32" fn SwitchToFiber(
-            fiber: ?windows.PVOID,
-        ) callconv(.Stdcall) void;
-
-        extern "kernel32" fn DeleteFiber(
-            fiber: ?windows.PVOID,
-        ) callconv(.Stdcall) void;
-
-        extern "kernel32" fn CreateFiberEx(
-            dwStackCommitSize: windows.SIZE_T,
-            dwStackReserveSize: windows.SIZE_T,
-            dwFlags: windows.DWORD,
-            lpStartAddress: usize,
-            lpParameter: ?windows.PVOID,
-        ) callconv(.Stdcall) ?windows.PVOID;
-
-        const Info = struct {
-            allocator: *std.mem.Allocator,
-            fiber: ?windows.PVOID,
-            result: @typeInfo(@TypeOf(benchmark)).Fn.return_type.?,
-        };
-
-        fn run(allocator: *std.mem.Allocator) !void {
-            var info = Info{
-                .allocator = allocator,
-                .fiber = ConvertThreadToFiber(null) orelse unreachable,
-                .result = undefined,
-            };
-
-            const fiber = CreateFiberEx(
-                256 * 1024 * 1024,
-                256 * 1024 * 1024,
-                FIBER_FLAG_FLOAT_SWITCH,
-                @ptrToInt(wrapper),
-                @ptrCast(windows.PVOID, &info),
-            ) orelse unreachable;
-            SwitchToFiber(fiber);
-            DeleteFiber(fiber);
-
-            return info.result;
-        }
-
-        fn wrapper(arg: windows.PVOID) callconv(.C) void {
-            const info = @ptrCast(*Info, @alignCast(@alignOf(Info), arg));
-            info.result = benchmark(info.allocator);
-            SwitchToFiber(info.fiber);
-        }
-    },
-    else => struct {
-        fn run(allocator: *std.mem.Allocator) !void {
-            try benchmark(allocator);
-        }
-    },
-};
-
-fn benchmark(allocator: *std.mem.Allocator) !void {
     var measures = std.ArrayList(Duration).init(allocator);
     defer measures.deinit();
 

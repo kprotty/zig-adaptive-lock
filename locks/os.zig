@@ -60,11 +60,11 @@ pub const Lock =
             }
 
             pub fn acquire(self: *Lock) void {
-                std.debug.assert(pthread_mutex_acquire(&self.mutex) == 0);
+                std.debug.assert(pthread_mutex_lock(&self.mutex) == 0);
             }
 
             pub fn release(self: *Lock) void {
-                std.debug.assert(pthread_mutex_release(&self.mutex) == 0);
+                std.debug.assert(pthread_mutex_unlock(&self.mutex) == 0);
             }
 
             const pthread_mutex_t = pthread_t;
