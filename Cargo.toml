@@ -2,4 +2,7 @@
 name = "usync"
 version = "0.0.0"
 edition = "2018"
+license = "Apache-2.0"
 authors = ["kprotty"]
+homepage = "https://github.com/kprotty"
+description = "(WIP) synchronization library"
