@@ -18,6 +18,7 @@ const locks = .{
     "spin",
     // "ticket",
     "os",
+    "futex",
     "parking_lot",
     // "word_lock",
     "word_lock_waking",
