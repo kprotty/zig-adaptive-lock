@@ -16,8 +16,9 @@ const std = @import("std");
 
 const locks = .{
     "spin",
-    "ticket",
+    // "ticket",
     "os",
+    "webkit_wordlock",
 };
 
 fn help() void {
@@ -160,7 +161,7 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
 
                 lock_operations += 1;
 
-                if (lock_operations % 10_000 == 0) {
+                if (lock_operations % 32 == 0) {
                     works_locked = base_work_locked.count(&prng);
                     works_unlocked = base_work_unlocked.count(&prng);
                 }
