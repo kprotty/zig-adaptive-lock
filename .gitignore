@@ -1,3 +1,2 @@
-zig-cache/
-.history/
-.vscode/
+target/
+Cargo.lock
