@@ -19,6 +19,7 @@ const locks = .{
     // "ticket",
     "os",
     "word_lock",
+    "word_lock_waking",
     "webkit_wordlock",
 };
 

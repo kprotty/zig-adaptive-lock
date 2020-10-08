@@ -22,8 +22,8 @@ pub const Lock = extern struct {
 
     const UNLOCKED = 0;
     const LOCKED = 1;
-    const WAKING = 2;
-    const WAITING = ~@as(usize, LOCKED | WAKING);
+    const WAKING = 1 << 8;
+    const WAITING = ~@as(usize, (1 << 9) - 1);
 
     const Waiter = struct {
         prev: ?*Waiter align(~WAITING + 1),
@@ -40,15 +40,27 @@ pub const Lock = extern struct {
         self.* = undefined;
     }
 
+    pub fn tryAcquire(self: *Lock) bool {
+        if (utils.is_x86) {
+            return asm volatile(
+                "lock btsl $0, %[ptr]"
+                : [ret] "={@ccc}" (-> u8),
+                : [ptr] "*m" (&self.state)
+                : "cc", "memory"
+            ) == 0;
+        } else {
+            return @atomicRmw(
+                u8,
+                @ptrCast(*u8, &self.state),
+                .Xchg,
+                LOCKED,
+                .Acquire,
+            ) == UNLOCKED;
+        }
+    }
+
     pub fn acquire(self: *Lock) void {
-        if (@cmpxchgWeak(
-            usize,
-            &self.state,
-            UNLOCKED,
-            LOCKED,
-            .Acquire,
-            .Monotonic,
-        )) |_| {
+        if (!self.tryAcquire()) {
             self.acquireSlow();
         }
     }
@@ -56,19 +68,16 @@ pub const Lock = extern struct {
     fn acquireSlow(self: *Lock) void {
         @setCold(true);
 
+        var is_waking = false;
         var spin = utils.SpinWait{};
         var state = @atomicLoad(usize, &self.state, .Monotonic);
 
         while (true) {
             if (state & LOCKED == 0) {
-                state = @cmpxchgWeak(
-                    usize,
-                    &self.state,
-                    state,
-                    state | LOCKED,
-                    .Acquire,
-                    .Monotonic,
-                ) orelse return;
+                if (self.tryAcquire())
+                    return;
+                utils.yieldThread(1);
+                state = @atomicLoad(usize, &self.state, .Monotonic);
                 continue;
             }
             
@@ -86,11 +95,12 @@ pub const Lock = extern struct {
                 .event = utils.Event{},
             };
 
+            var new_state = (state & ~WAITING) | @ptrToInt(&waiter);
             if (@cmpxchgWeak(
                 usize,
                 &self.state,
                 state,
-                (state & ~WAITING) | @ptrToInt(&waiter),
+                new_state,
                 .Release,
                 .Monotonic,
             )) |updated| {
@@ -99,15 +109,26 @@ pub const Lock = extern struct {
             }
 
             waiter.event.wait();
-            spin.reset();
+            
+            if (utils.is_x86) {
+                _ = asm volatile(
+                    "lock btrl $8, %[ptr]" 
+                    :: [ptr] "*m"(&self.state)
+                    : "cc", "memory"
+                );
+            } else {
+                _ = @atomicRmw(usize, &self.state, .And, ~@as(usize, WAKING), .Release);
+            }
 
-            _ = @atomicRmw(usize, &self.state, .And, ~@as(usize, WAKING), .Release);
+            spin.reset();
             state = @atomicLoad(usize, &self.state, .Monotonic);
         }
     }
 
     pub fn release(self: *Lock) void {
-        const state = @atomicRmw(usize, &self.state, .Sub, LOCKED, .Release);
+        @atomicStore(u8, @ptrCast(*u8, &self.state), UNLOCKED, .Release);
+
+        const state = @atomicLoad(usize, &self.state, .Monotonic);
         if ((state & WAKING == 0) and (state & WAITING != 0)) {
             self.releaseSlow();
         }

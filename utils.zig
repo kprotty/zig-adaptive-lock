@@ -14,6 +14,16 @@
 
 const std = @import("std");
 
+pub const is_x86 = switch (std.builtin.arch) {
+    .i386, .x86_64 => true,
+    else => false,
+};
+
+pub const is_arm = switch (std.builtin.arch) {
+    .arm, .aarch64 => true,
+    else => false,
+};
+
 pub const is_linux = std.builtin.os.tag == .linux;
 pub const is_windows = std.builtin.os.tag == .windows;
 pub const is_darwin = switch (std.builtin.os.tag) {
@@ -45,10 +55,10 @@ pub const is_posix = std.builtin.link_libc and (switch (std.builtin.os.tag) {
 pub fn yieldCpu(iterations: usize) void {
     var i = iterations;
     while (i != 0) : (i -= 1) {
-        switch (std.builtin.arch) {
-            .i386, .x86_64 => asm volatile("pause" ::: "memory"),
-            .arm, .aarch64 => asm volatile("yield" ::: "memory"),
-            else => {},
+        if (is_x86) {
+            asm volatile("pause" ::: "memory");
+        } else if (is_arm) {
+            asm volatile("yield" ::: "memory");
         }
     }
 }
