@@ -16,11 +16,12 @@ const std = @import("std");
 
 const locks = .{
     "spin",
-    "ticket",
+    // "ticket",
     "os",
-    "word_lock",
+    "parking_lot",
+    // "word_lock",
     "word_lock_waking",
-    "webkit_wordlock",
+    //"webkit_wordlock",
 };
 
 fn help() void {
