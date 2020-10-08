@@ -79,6 +79,29 @@ pub const Lock =
             extern "c" fn pthread_mutex_unlock(p: *pthread_mutex_t) callconv(.C) c_int;
         }
     else if (utils.is_linux)
-        @compileError("TODO: implement linux OS lock: https://akkadia.org/drepper/futex.pdf")
+        extern struct {
+            pub const name = "futex";
+
+            const futex = @import("./futex.zig");
+            const InnerLock = futex.FutexLock(futex.LinuxFutex);
+
+            inner: InnerLock,
+
+            pub fn init(self: *Lock) void {
+                self.inner.init();
+            }
+
+            pub fn deinit(self: *Lock) void {
+                self.inner.deinit();
+            }
+
+            pub fn acquire(self: *Lock) void {
+                self.inner.acquire();
+            }
+
+            pub fn release(self: *Lock) void {
+                self.inner.release();
+            }
+        }
     else
         @compileError("OS does not provide a default lock");

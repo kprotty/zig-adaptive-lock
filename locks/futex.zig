@@ -15,7 +15,7 @@
 const std = @import("std");
 const utils = @import("../utils.zig");
 
-pub const Lock = FutexLock(OsFutex);
+pub const Lock = FutexLock(GenericFutex);
 
 pub const OsFutex = 
     if (utils.is_windows)
@@ -30,7 +30,7 @@ pub const OsFutex =
 pub fn FutexLock(comptime Futex: type) type {
     return extern struct {
         pub const name = "futex_lock";
-        const Lock = @This();
+        const Self = @This();
 
         state: State,
         futex: Futex,
@@ -41,22 +41,22 @@ pub fn FutexLock(comptime Futex: type) type {
             parked,
         };
 
-        pub fn init(self: *Lock) void {
+        pub fn init(self: *Self) void {
             self.state = .unlocked;
             self.futex.init();
         }
 
-        pub fn deinit(self: *Lock) void {
+        pub fn deinit(self: *Self) void {
             self.futex.deinit();
         }
 
-        pub fn acquire(self: *Lock) void {
+        pub fn acquire(self: *Self) void {
             const state = @atomicRmw(State, &self.state, .Xchg, .locked, .Acquire);
             if (state != .unlocked)
                 self.acquireSlow(state);
         }
 
-        fn acquireSlow(self: *Lock, acquire_state: State) void {
+        fn acquireSlow(self: *Self, acquire_state: State) void {
             @setCold(true);
 
             var spin = utils.SpinWait{};
@@ -94,13 +94,13 @@ pub fn FutexLock(comptime Futex: type) type {
             }
         }
 
-        pub fn release(self: *Lock) void {
+        pub fn release(self: *Self) void {
             if (@atomicRmw(State, &self.state, .Xchg, .unlocked, .Release) == .parked) {
                 self.releaseSlow();
             } 
         }
 
-        fn releaseSlow(self: *Lock) void {
+        fn releaseSlow(self: *Self) void {
             @setCold(true);
             self.futex.wake(
                 @ptrCast(*const i32, &self.state),
