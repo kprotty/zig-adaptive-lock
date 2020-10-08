@@ -367,10 +367,13 @@ const Result = struct {
     const name_align = 18;
     const val_align = 8;
 
-    fn toStr(comptime int: usize) []const u8 {
-        @setEvalBranchQuota(2000);
-        comptime var buffer: [64]u8 = undefined;
-        return std.fmt.bufPrint(&buffer, "{}", .{int}) catch unreachable;
+    fn toStr(comptime int: u8) []const u8 {
+        if (int < 10)
+            return &[_]u8{ '0' + int };
+        return &[_]u8{
+            '0' + (int / 10),
+            '0' + (int % 10),
+        };
     }
 
     pub fn format(

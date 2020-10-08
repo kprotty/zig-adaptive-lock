@@ -90,6 +90,7 @@ pub const Lock = extern struct {
             state = @atomicLoad(u8, &self.state, .Monotonic);
             if (state != (PARKED | LOCKED)) {
                 bucket.lock.release();
+                spin.reset();
                 state = @atomicLoad(u8, &self.state, .Monotonic);
                 continue;
             }
@@ -171,21 +172,22 @@ pub const Lock = extern struct {
 
         if (waiter) |w| {
             const has_more = bucket.head != null;
-            const be_fair = blk: {
-                const now = utils.nanotime();
-                const be_fair = now > bucket.timed_out;
-                if (be_fair) {
-                    var x = bucket.prng;
-                    x ^= x << 13;
-                    x ^= x >> 17;
-                    x ^= x << 5;
-                    bucket.prng = x;
-                    var timeout = x % (500 * std.time.ns_per_us);
-                    timeout += 500 * std.time.ns_per_us;
-                    bucket.timed_out = now + timeout;
-                }
-                break :blk be_fair;
-            };
+            const be_fair = false;
+            // const be_fair = blk: {
+            //     const now = utils.nanotime();
+            //     const be_fair = now > bucket.timed_out;
+            //     if (be_fair) {
+            //         var x = bucket.prng;
+            //         x ^= x << 13;
+            //         x ^= x >> 17;
+            //         x ^= x << 5;
+            //         bucket.prng = x;
+            //         var timeout = x % (500 * std.time.ns_per_us);
+            //         timeout += 500 * std.time.ns_per_us;
+            //         bucket.timed_out = now + timeout;
+            //     }
+            //     break :blk be_fair;
+            // };
 
             w.acquired = be_fair;
             if (be_fair) {
