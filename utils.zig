@@ -63,6 +63,28 @@ pub fn yieldThread(iterations: usize) void {
     }
 }
 
+pub const SpinWait = struct {
+    counter: std.math.Log2Int(usize) = 0,
+
+    pub fn reset(self: *SpinWait) void {
+        self.counter = 0;
+    }
+
+    pub fn yield(self: *SpinWait) bool {
+        if (self.counter > 10)
+            return false;
+
+        self.counter += 1;
+        if (self.counter <= 3) {
+            yieldCpu(@as(usize, 1) << self.counter);
+        } else {
+            yieldThread(1);
+        }
+
+        return true;
+    }
+};
+
 pub const Event = 
     if (is_windows)
         extern struct {

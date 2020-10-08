@@ -18,6 +18,7 @@ const locks = .{
     "spin",
     // "ticket",
     "os",
+    "word_lock",
     "webkit_wordlock",
 };
 
