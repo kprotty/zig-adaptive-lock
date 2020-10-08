@@ -113,7 +113,7 @@ pub const Lock = extern struct {
             waiter.event.wait();
 
             // spin = 0;
-            waiter.event.reset();
+            // waiter.event.reset();
             state = @atomicLoad(usize, &self.state, .Monotonic);
         }
     }

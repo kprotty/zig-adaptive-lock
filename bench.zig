@@ -16,7 +16,7 @@ const std = @import("std");
 
 const locks = .{
     "spin",
-    // "ticket",
+    "ticket",
     "os",
     "word_lock",
     "word_lock_waking",

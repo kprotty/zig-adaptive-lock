@@ -185,6 +185,11 @@ pub const Event =
                     std.debug.assert(pthread_mutex_destroy(&self.mutex) == 0);
                 }
 
+                fn destructor(ptr: *c_void) callconv(.C) void {
+                    const self = @ptrCast(*Inner, @alignCast(@alignOf(Inner), ptr));
+                    self.deinit();
+                }
+
                 fn get() *Inner {
                     const tls_key = blk: {
                         if (@atomicLoad(KeyState, &key_state, .Acquire) == .init)
@@ -217,14 +222,14 @@ pub const Event =
                                 .Acquire,
                                 .Acquire,
                             ) orelse blk: {
-                                if (pthread_key_create(&key, Inner.deinit) != 0)
+                                if (pthread_key_create(&key, Inner.destructor) != 0)
                                     unreachable;
-                                @atomicStore(KeyState, &self.state, .init, .Release);
+                                @atomicStore(KeyState, &key_state, .init, .Release);
                                 break :blk .init;
                             },
                             .pending => {
                                 yieldThread(1);
-                                state = @atomicLoad(KeyState, &self.state, .Acquire);
+                                state = @atomicLoad(KeyState, &key_state, .Acquire);
                             },
                             .init => {
                                 return key;
@@ -244,7 +249,7 @@ pub const Event =
 
                     self.updated = true;
                     while (self.updated) {
-                        std.debug.assert(pthread_cond_wait(&self.cond, &self.mutex));
+                        std.debug.assert(pthread_cond_wait(&self.cond, &self.mutex) == 0);
                     }
                 }
 
@@ -274,8 +279,8 @@ pub const Event =
 
             const pthread_key_t = usize;
             extern "c" fn pthread_key_create(p: *pthread_key_t, destructor: fn(*c_void) callconv(.C) void) callconv(.C) c_int;
-            extern "c" fn pthread_getspecific(p: *pthread_key_t) callconv(.C) ?*c_void;
-            extern "c" fn pthread_setspecific(p: *pthread_key_t, value: ?*const c_void) callconv(.C) c_int;
+            extern "c" fn pthread_getspecific(p: pthread_key_t) callconv(.C) ?*c_void;
+            extern "c" fn pthread_setspecific(p: pthread_key_t, value: ?*const c_void) callconv(.C) c_int;
 
             const pthread_cond_t = pthread_t;
             const pthread_condattr_t = pthread_t;
