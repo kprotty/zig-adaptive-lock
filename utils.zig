@@ -73,6 +73,52 @@ pub fn yieldThread(iterations: usize) void {
     }
 }
 
+pub fn nanotime() u64 {
+    const Time = struct {
+        var timer_state = State.uninit;
+        var timer: std.time.Timer = undefined;
+
+        const State = extern enum(usize) {
+            uninit,
+            pending,
+            init,
+        };
+
+        fn nanotime() u64 {
+            if (@atomicLoad(State, &timer_state, .Acquire) != .init)
+                initTimer();
+            return timer.read();
+        } 
+
+        fn initTimer() void {
+            @setCold(true);
+            var state = @atomicLoad(State, &timer_state, .Acquire);
+            while (true) {
+                switch (state) {
+                    .uninit => state = @cmpxchgWeak(
+                        State,
+                        &timer_state,
+                        .uninit,
+                        .pending,
+                        .Acquire,
+                        .Acquire,
+                    ) orelse {
+                        timer = std.time.Timer.start() catch unreachable;
+                        @atomicStore(State, &timer_state, .init, .Release);
+                        return;
+                    },
+                    .pending => {
+                        yieldThread(1);
+                        state = @atomicLoad(State, &timer_state, .Acquire);
+                    },
+                    .init => return,
+                }
+            }
+        }
+    };
+    return Time.nanotime();
+}
+
 pub const SpinWait = struct {
     counter: std.math.Log2Int(usize) = 0,
 

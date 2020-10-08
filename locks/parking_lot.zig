@@ -172,7 +172,7 @@ pub const Lock = extern struct {
         if (waiter) |w| {
             const has_more = bucket.head != null;
             const be_fair = blk: {
-                const now = bucket.timer.read();
+                const now = utils.nanotime();
                 const be_fair = now > bucket.timed_out;
                 if (be_fair) {
                     var x = bucket.prng;
@@ -186,7 +186,7 @@ pub const Lock = extern struct {
                 }
                 break :blk be_fair;
             };
-            
+
             w.acquired = be_fair;
             if (be_fair) {
                 if (!has_more)
@@ -239,6 +239,8 @@ pub const Lock = extern struct {
         }
 
         fn initSlow() void {
+            @setCold(true);
+
             var state = @atomicLoad(State, &bk_state, .Acquire);
             while (true) {
                 switch (state) {
@@ -263,7 +265,6 @@ pub const Lock = extern struct {
             bk_instance.tail = null;
             bk_instance.timed_out = 0;
             bk_instance.prng = @truncate(u32, @ptrToInt(&bk_instance) >> 16);
-            bk_instance.timer = std.time.Timer.start() catch unreachable;
             @atomicStore(State, &bk_state, .init, .Release);
         }
     };
