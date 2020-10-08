@@ -1,0 +1,8 @@
+[package]
+name = "benchmark"
+version = "0.0.0"
+license = "Apache-2.0"
+authors = ["kprotty"]
+
+[dependencies]
+parking_lot = "0.11"
