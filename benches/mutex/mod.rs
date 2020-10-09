@@ -30,6 +30,7 @@ mod parking_lot_lock;
 mod simple_mutex_lock;
 mod spin_lock;
 mod word_lock;
+mod word_lock_waking;
 mod plot_lock;
 
 fn bench_all(b: &mut Benchmarker) {
@@ -37,8 +38,9 @@ fn bench_all(b: &mut Benchmarker) {
     b.bench::<os_lock::Lock>();
     b.bench::<simple_mutex_lock::Lock>();
     b.bench::<parking_lot_lock::Lock>();
-    b.bench::<word_lock::Lock>();
     b.bench::<plot_lock::Lock>();
+    b.bench::<word_lock::Lock>();
+    b.bench::<word_lock_waking::Lock>();
 }
 
 pub unsafe trait Lock: Send + Sync + 'static {

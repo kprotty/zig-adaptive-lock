@@ -263,7 +263,7 @@ impl Waiter {
     }
 }
 
-type WordLock = super::word_lock::Lock;
+type WordLock = super::word_lock_waking::Lock;
 
 struct BucketInner {
     head: Option<NonNull<Waiter>>,
