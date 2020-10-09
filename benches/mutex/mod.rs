@@ -217,7 +217,7 @@ impl ArgParser {
 
         println!();
         println!(" [count]: {{usize}}");
-        println!(" [time]: {{u128}}[time_unit]");
+        println!(" [time]: {{u64}}[time_unit]");
         println!(" [time_unit]: \"ns\" | \"us\" | \"ms\" | \"s\"");
 
         println!();
