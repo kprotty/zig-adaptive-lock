@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(unused, non_camel_case_types)]
+
 #[cfg(windows)]
 pub use windows::*;
 
@@ -24,6 +26,7 @@ mod windows {
     extern "system" {
         pub fn AcquireSRWLockExclusive(p: *mut SRWLOCK);
         pub fn ReleaseSRWLockExclusive(p: *mut SRWLOCK);
+        pub fn Sleep(dwMillisecond: u32);
     }
 }
 
@@ -50,8 +53,8 @@ pub use posix::*;
 
 #[cfg(unix)]
 mod posix {
-    #[repr(align(16))]
-    pub struct pthread_t(std::mem::MaybeUninit<[u8; 64]>);
+    #[repr(C, align(16))]
+    pub struct pthread_t(pub std::mem::MaybeUninit<[u8; 64]>);
 
     pub type pthread_mutex_t = pthread_t;
     pub type pthread_mutexattr_t = pthread_t;

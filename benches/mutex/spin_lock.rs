@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::atomic::{AtomicBool, spin_loop_hint, Ordering};
+use super::util::SpinWait;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct Lock(AtomicBool);
 
@@ -33,11 +34,18 @@ unsafe impl super::Lock for Lock {
 impl Lock {
     fn acquire(&self) {
         let mut locked = false;
+        let mut spin = SpinWait::new();
+
         loop {
             if !locked && !self.0.swap(true, Ordering::Acquire) {
                 return;
             }
-            spin_loop_hint();
+
+            if !spin.yield_now() {
+                spin.reset();
+                let _ = spin.yield_now();
+            }
+
             locked = self.0.load(Ordering::Relaxed);
         }
     }

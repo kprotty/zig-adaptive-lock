@@ -12,7 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod sys;
+pub struct SpinWait(usize);
 
-mod spin_wait;
-pub use spin_wait::SpinWait;
+impl SpinWait {
+    pub const fn new() -> Self {
+        Self(0)
+    }
+
+    pub fn reset(&mut self) {
+        self.0 = 0;
+    }
+
+    pub fn yield_now(&mut self) -> bool {
+        if self.0 > 10 {
+            return false;
+        }
+
+        self.0 += 1;
+        if self.0 <= 3 {
+            (0..(1 << self.0)).for_each(|_| std::sync::atomic::spin_loop_hint());
+        } else {
+            #[cfg(windows)]
+            unsafe { super::sys::Sleep(0) };
+            #[cfg(not(windows))]
+            std::thread::yield_now();
+        }
+
+        true
+    }
+}

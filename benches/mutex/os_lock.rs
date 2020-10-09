@@ -70,7 +70,7 @@ mod posix {
             Self(unsafe {
                 let mutex = sys::pthread_t(std::mem::MaybeUninit::uninit());
                 let mutex = Box::new(UnsafeCell::new(mutex));
-                let _ = pthread_mutex_init(mutex.0.get(), std::ptr::null());
+                let _ = sys::pthread_mutex_init(mutex.get(), std::ptr::null());
                 mutex
             })
         }

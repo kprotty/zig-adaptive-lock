@@ -27,10 +27,14 @@ mod util;
 
 mod os_lock;
 mod spin_lock;
+mod simple_mutex_lock;
+mod parking_lot_lock;
 
 fn bench_all(b: &mut Benchmarker) {
     b.bench::<spin_lock::Lock>();
     b.bench::<os_lock::Lock>();
+    b.bench::<simple_mutex_lock::Lock>();
+    b.bench::<parking_lot_lock::Lock>();
 }
 
 pub unsafe trait Lock: Send + Sync + 'static {

@@ -12,7 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod sys;
+type Mutex = simple_mutex::Mutex<()>;
 
-mod spin_wait;
-pub use spin_wait::SpinWait;
+pub struct Lock(Mutex);
+
+unsafe impl super::Lock for Lock {
+    const NAME: &'static str = "simple_mutex";
+
+    fn new() -> Self {
+        Self(Mutex::new(()))
+    }
+
+    fn with(&self, f: impl FnOnce()) {
+        let _ = self.0.lock();
+        f();
+    }
+}
