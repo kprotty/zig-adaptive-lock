@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::util::{Parker, SpinWait, Instant};
+use super::util::{Instant, Parker, SpinWait};
 use std::{
     cell::{Cell, UnsafeCell},
     ptr::NonNull,
-    time::Duration,
     sync::atomic::{AtomicU8, Ordering},
+    time::Duration,
 };
 
 const UNLOCKED: u8 = 0;
@@ -95,12 +95,11 @@ impl Lock {
             let acquired = Waiter::with(|waiter| {
                 let address = &self.state as *const _ as usize;
                 let is_waiting = Bucket::get(address).with(|bucket| unsafe {
-
                     state = self.state.load(Ordering::Relaxed);
                     if state != (LOCKED | PARKED) {
                         return false;
                     }
-                    
+
                     waiter.parker.prepare();
                     waiter.next.set(None);
                     waiter.acquired.set(false);
@@ -123,7 +122,7 @@ impl Lock {
 
                 waiter.acquired.get()
             });
-            
+
             if acquired {
                 return;
             }
@@ -149,7 +148,6 @@ impl Lock {
         let force_fair = false;
         let address = &self.state as *const _ as usize;
         let waiter = Bucket::get(address).with(|bucket| unsafe {
-
             // find and dequeue a waiter with the same address
             let mut waiter = bucket.head;
             let mut waiter_next = None;
@@ -178,7 +176,6 @@ impl Lock {
 
             let waiter = waiter.map(|w| &*w.as_ptr());
             if let Some(waiter) = waiter {
-
                 let has_more = {
                     let mut has_more = false;
                     let mut current = waiter_next;
@@ -203,9 +200,9 @@ impl Lock {
                         let nanos = bucket.prng % 1_000_000;
                         bucket.timeout = now + Duration::new(0, nanos);
                         true
-                    } 
+                    }
                 };
-                
+
                 if be_fair {
                     waiter.acquired.set(true);
                     if !has_more {
@@ -252,13 +249,11 @@ impl Waiter {
     fn with<T>(f: impl FnOnce(&Waiter) -> T) -> T {
         let mut stack_waiter = None;
         thread_local!(static WAITER: Waiter = Waiter::new());
-        
+
         let waiter_ptr = WAITER
             .try_with(|x| x as *const Waiter)
-            .unwrap_or_else(|_| {
-                stack_waiter.get_or_insert_with(Waiter::new)
-            });
-        
+            .unwrap_or_else(|_| stack_waiter.get_or_insert_with(Waiter::new));
+
         f(unsafe { &*waiter_ptr })
     }
 }
@@ -295,9 +290,7 @@ impl Bucket {
         use super::Lock;
         let mut result = None;
         self.lock.with(|| {
-            result = Some(f(unsafe {
-                &mut *self.inner.get()
-            }));
+            result = Some(f(unsafe { &mut *self.inner.get() }));
         });
         result.unwrap()
     }
@@ -345,4 +338,3 @@ impl Bucket {
         unsafe { &*Init::get() }
     }
 }
-

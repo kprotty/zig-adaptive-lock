@@ -25,15 +25,15 @@ use std::{
 
 mod util;
 
+mod futex_lock;
 mod os_lock;
 mod parking_lot_lock;
+mod plot_lock;
 mod simple_mutex_lock;
 mod spin_lock;
 mod word_lock;
 mod word_lock_fair;
 mod word_lock_waking;
-mod plot_lock;
-mod futex_lock;
 
 fn bench_all(b: &mut Benchmarker) {
     b.bench::<spin_lock::Lock>();
@@ -44,7 +44,7 @@ fn bench_all(b: &mut Benchmarker) {
     b.bench::<word_lock::Lock>();
     b.bench::<word_lock_fair::Lock>();
     b.bench::<word_lock_waking::Lock>();
-    
+
     b.bench::<futex_lock::FutexLock<futex_lock::OsFutex>>();
     #[cfg(any(windows, target_os = "linux"))]
     b.bench::<futex_lock::FutexLock<futex_lock::generic::Futex>>();

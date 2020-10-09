@@ -69,7 +69,12 @@ impl<F: Futex> FutexLock<F> {
                 if state == UNLOCKED {
                     if self
                         .state
-                        .compare_exchange_weak(state, acquire_state, Ordering::Acquire, Ordering::Relaxed)
+                        .compare_exchange_weak(
+                            state,
+                            acquire_state,
+                            Ordering::Acquire,
+                            Ordering::Relaxed,
+                        )
                         .is_ok()
                     {
                         return;
@@ -114,13 +119,16 @@ pub type OsFutex = generic::Futex;
 #[cfg(windows)]
 pub mod windows {
     use super::super::util::sys;
-    use std::{mem::transmute, sync::atomic::{AtomicI32, AtomicUsize, Ordering}};
+    use std::{
+        mem::transmute,
+        sync::atomic::{AtomicI32, AtomicUsize, Ordering},
+    };
 
     static WAIT_FN: AtomicUsize = AtomicUsize::new(0);
     static WAKE_FN: AtomicUsize = AtomicUsize::new(0);
 
-    type WaitOnAddressFn = extern "system" fn(usize, usize, usize, u32) -> u32; 
-    type WakeByAddressSingleFn = extern "system" fn(usize); 
+    type WaitOnAddressFn = extern "system" fn(usize, usize, usize, u32) -> u32;
+    type WakeByAddressSingleFn = extern "system" fn(usize);
 
     pub struct Futex;
 
@@ -128,7 +136,7 @@ pub mod windows {
         const LOCK_NAME: &'static str = "futex_windows";
 
         fn new() -> Self {
-            Self{}
+            Self {}
         }
 
         unsafe fn wait(&self, ptr: &AtomicI32, cmp: i32) {
@@ -137,7 +145,7 @@ pub mod windows {
                 Self::load_fn_ptr();
                 wait_fn_ptr = WAIT_FN.load(Ordering::Relaxed);
             }
-            
+
             let wait_fn: WaitOnAddressFn = transmute(wait_fn_ptr);
             let _ = wait_fn(
                 ptr as *const _ as usize,
@@ -187,7 +195,7 @@ pub mod linux {
         const LOCK_NAME: &'static str = "futex_linux";
 
         fn new() -> Self {
-            Self{}
+            Self {}
         }
 
         unsafe fn wait(&self, ptr: &AtomicI32, cmp: i32) {
@@ -213,7 +221,11 @@ pub mod linux {
 
 pub mod generic {
     use super::super::util::Parker;
-    use std::{cell::{Cell, UnsafeCell}, ptr::NonNull, sync::atomic::{AtomicI32, Ordering}};
+    use std::{
+        cell::{Cell, UnsafeCell},
+        ptr::NonNull,
+        sync::atomic::{AtomicI32, Ordering},
+    };
 
     type InnerLock = super::super::word_lock_waking::Lock;
 
@@ -235,7 +247,8 @@ pub mod generic {
         fn with_queue<T>(&self, f: impl FnOnce(&mut Option<NonNull<Waiter>>) -> T) -> T {
             use super::super::Lock;
             let mut result = None;
-            self.lock.with(|| result = Some(f(unsafe { &mut *self.queue.get() })));
+            self.lock
+                .with(|| result = Some(f(unsafe { &mut *self.queue.get() })));
             result.unwrap()
         }
     }

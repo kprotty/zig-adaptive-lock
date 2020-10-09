@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::util::{Parker, SpinWait, Instant};
+use super::util::{Instant, Parker, SpinWait};
 use std::{
     cell::Cell,
     ptr::NonNull,
-    time::Duration,
     sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
 };
 
 const UNLOCKED: usize = 0;
@@ -147,7 +147,7 @@ impl Lock {
             .is_err()
         {
             self.release_slow();
-        } 
+        }
     }
 
     #[cold]
@@ -174,11 +174,10 @@ impl Lock {
                         }
                     }
                 });
-                
+
                 let event = &*tail.as_ref().event.as_ptr();
-                let (parker, force_fair_at) = event
-                    .as_ref()
-                    .expect("waiter enqueued without an event");
+                let (parker, force_fair_at) =
+                    event.as_ref().expect("waiter enqueued without an event");
 
                 let be_fair = {
                     let released = released_at.unwrap_or_else(|| {
@@ -194,18 +193,18 @@ impl Lock {
                         if !be_fair {
                             self.state.fetch_and(!LOCKED, Ordering::Release);
                         }
-                    },
+                    }
                     _ => match self.state.compare_exchange_weak(
                         state,
                         if be_fair { LOCKED } else { UNLOCKED },
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     ) {
-                        Ok(_) => {},
+                        Ok(_) => {}
                         Err(e) => {
                             state = e;
                             continue;
-                        },
+                        }
                     },
                 }
 

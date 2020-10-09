@@ -21,7 +21,7 @@ pub use windows::Instant;
 #[cfg(windows)]
 mod windows {
     use super::super::sys;
-    use std::{ops::Add, time::Duration, convert::TryInto};
+    use std::{convert::TryInto, ops::Add, time::Duration};
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
     pub struct Instant(u64);

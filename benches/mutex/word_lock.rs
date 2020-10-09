@@ -57,7 +57,7 @@ impl Waiter {
         if ptr.is_null() {
             ptr = stack_waiter.get_or_insert_with(Waiter::new);
         }
-        
+
         f(unsafe { &*ptr })
     }
 }
@@ -150,7 +150,7 @@ impl Lock {
         let state = self.state.fetch_sub(LOCKED, Ordering::Release);
         if (state & WAITING != 0) && (state & WAKING == 0) {
             self.release_slow();
-        } 
+        }
     }
 
     #[cold]
@@ -209,18 +209,18 @@ impl Lock {
                     Some(new_tail) => {
                         head.as_ref().tail.set(Some(new_tail));
                         self.state.fetch_and(!WAKING, Ordering::Release);
-                    },
+                    }
                     _ => match self.state.compare_exchange_weak(
                         state,
                         UNLOCKED,
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     ) {
-                        Ok(_) => {},
+                        Ok(_) => {}
                         Err(e) => {
                             state = e;
                             continue;
-                        },
+                        }
                     },
                 }
 

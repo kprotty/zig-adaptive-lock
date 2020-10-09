@@ -16,7 +16,7 @@ use super::util::{Parker, SpinWait};
 use std::{
     cell::Cell,
     ptr::NonNull,
-    sync::atomic::{AtomicUsize, AtomicU8, Ordering},
+    sync::atomic::{AtomicU8, AtomicUsize, Ordering},
 };
 
 const UNLOCKED: u8 = 0;
@@ -57,7 +57,7 @@ impl Waiter {
         if ptr.is_null() {
             ptr = stack_waiter.get_or_insert_with(Waiter::new);
         }
-        
+
         f(unsafe { &*ptr })
     }
 }
@@ -152,11 +152,11 @@ impl Lock {
     #[inline]
     pub fn release(&self) {
         self.byte_state().store(UNLOCKED, Ordering::Release);
-        
+
         let state = self.state.load(Ordering::Relaxed);
         if (state & WAITING != 0) && (state & WAKING == 0) {
             self.release_slow();
-        } 
+        }
     }
 
     #[cold]
@@ -215,18 +215,18 @@ impl Lock {
                     Some(new_tail) => {
                         head.as_ref().tail.set(Some(new_tail));
                         std::sync::atomic::fence(Ordering::Release);
-                    },
+                    }
                     _ => match self.state.compare_exchange_weak(
                         state,
                         WAKING,
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     ) {
-                        Ok(_) => {},
+                        Ok(_) => {}
                         Err(e) => {
                             state = e;
                             continue;
-                        },
+                        }
                     },
                 }
 

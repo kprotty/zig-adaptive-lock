@@ -18,7 +18,10 @@ pub use windows::Parker;
 #[cfg(windows)]
 mod windows {
     use super::super::sys;
-    use std::{mem::transmute, sync::atomic::{AtomicU32, AtomicUsize, Ordering}};
+    use std::{
+        mem::transmute,
+        sync::atomic::{AtomicU32, AtomicUsize, Ordering},
+    };
 
     static WAIT_FN: AtomicUsize = AtomicUsize::new(0);
     static WAKE_FN: AtomicUsize = AtomicUsize::new(0);
@@ -96,7 +99,7 @@ pub use linux::Parker;
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::super::super::futex_lock::{Futex, linux};
+    use super::super::super::futex_lock::{linux, Futex};
     use std::sync::atomic::{AtomicI32, Ordering};
 
     pub struct Parker {
@@ -106,7 +109,7 @@ mod linux {
 
     impl Parker {
         pub const IS_CHEAP_TO_CONSTRUCT: bool = true;
-        
+
         pub fn new() -> Self {
             Self {
                 state: AtomicI32::new(0),
@@ -140,12 +143,12 @@ mod posix {
         sync::atomic::{AtomicBool, Ordering},
         thread,
     };
-    
+
     pub struct Parker {
         notified: AtomicBool,
         thread: thread::Thread,
     }
-    
+
     impl Parker {
         pub const IS_CHEAP_TO_CONSTRUCT: bool = false;
 
@@ -155,17 +158,17 @@ mod posix {
                 thread: thread::current(),
             }
         }
-    
+
         pub fn prepare(&self) {
             self.notified.store(false, Ordering::Relaxed);
         }
-    
+
         pub fn park(&self) {
             while !self.notified.load(Ordering::Acquire) {
                 thread::park();
             }
         }
-    
+
         pub fn unpark(&self) {
             let thread = self.thread.clone();
             self.notified.store(true, Ordering::Release);
@@ -173,5 +176,3 @@ mod posix {
         }
     }
 }
-
-
