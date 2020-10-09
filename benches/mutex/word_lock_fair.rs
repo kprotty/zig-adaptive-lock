@@ -104,7 +104,7 @@ impl Lock {
                     let ptr = head.unwrap_or(NonNull::from(&waiter));
                     let ptr = (ptr.as_ptr() as usize).wrapping_mul(31);
                     let timeout: u32 = ((ptr >> 16) & 0xffffffff).try_into().unwrap();
-                    let timeout = timeout % 1_000_000;
+                    let timeout = 500_000 + (timeout % 500_000);
                     Instant::now() + Duration::new(0, timeout)
                 })));
             }

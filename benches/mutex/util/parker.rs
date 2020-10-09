@@ -96,55 +96,37 @@ pub use linux::Parker;
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::super::sys;
+    use super::super::super::futex_lock::{Futex, linux};
     use std::sync::atomic::{AtomicI32, Ordering};
 
-    pub struct Parker(AtomicI32);
+    pub struct Parker {
+        state: AtomicI32,
+        futex: linux::Futex,
+    }
 
     impl Parker {
         pub const IS_CHEAP_TO_CONSTRUCT: bool = true;
         
         pub fn new() -> Self {
-            Self(AtomicI32::new(0))
-        }
-
-        #[inline]
-        pub fn prepare(&self) {
-            self.0.store(0, Ordering::Relaxed);
-        }
-
-        #[inline]
-        pub fn park(&self) {
-            while self.0.load(Ordering::Acquire) == 0 {
-                unsafe { self.futex_wait() };
+            Self {
+                state: AtomicI32::new(0),
+                futex: linux::Futex::new(),
             }
         }
 
-        #[inline]
+        pub fn prepare(&self) {
+            self.state.store(0, Ordering::Relaxed);
+        }
+
+        pub fn park(&self) {
+            while self.state.load(Ordering::Acquire) == 0 {
+                unsafe { self.futex.wait(&self.state, 0) };
+            }
+        }
+
         pub fn unpark(&self) {
-            self.0.store(1, Ordering::Release);
-            unsafe { self.futex_wake() };
-        }
-
-        #[cold]
-        unsafe fn futex_wait(&self) {
-            let _ = sys::syscall(
-                sys::SYS_FUTEX,
-                &self.0 as *const _ as usize,
-                sys::FUTEX_PRIVATE_FLAG | sys::FUTEX_WAIT,
-                0i32,
-                0usize,
-            );
-        }
-
-        #[cold]
-        unsafe fn futex_wake(&self) {
-            let _ = sys::syscall(
-                sys::SYS_FUTEX,
-                &self.0 as *const _ as usize,
-                sys::FUTEX_PRIVATE_FLAG | sys::FUTEX_WAKE,
-                1i32,
-            );
+            self.state.store(1, Ordering::Release);
+            unsafe { self.futex.wake(&self.state) };
         }
     }
 }
