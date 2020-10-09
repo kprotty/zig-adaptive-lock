@@ -26,15 +26,19 @@ use std::{
 mod util;
 
 mod os_lock;
-mod spin_lock;
-mod simple_mutex_lock;
 mod parking_lot_lock;
+mod simple_mutex_lock;
+mod spin_lock;
+mod word_lock;
+mod plot_lock;
 
 fn bench_all(b: &mut Benchmarker) {
     b.bench::<spin_lock::Lock>();
     b.bench::<os_lock::Lock>();
     b.bench::<simple_mutex_lock::Lock>();
     b.bench::<parking_lot_lock::Lock>();
+    b.bench::<word_lock::Lock>();
+    b.bench::<plot_lock::Lock>();
 }
 
 pub unsafe trait Lock: Send + Sync + 'static {
@@ -463,7 +467,7 @@ pub fn main() {
                         locked: locked.scaled(ns_per_work),
                         unlocked: unlocked.scaled(ns_per_work),
                     };
-                    
+
                     println!(
                         "measure={:?} threads={:?} locked={:?} unlocked={:?}\n{}\n{:?}",
                         measure,

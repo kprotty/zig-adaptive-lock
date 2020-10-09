@@ -12,28 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub struct SpinWait(usize);
+pub struct SpinWait {
+    counter: u32,
+}
 
 impl SpinWait {
     pub const fn new() -> Self {
-        Self(0)
+        Self { counter: 0 }
     }
 
     pub fn reset(&mut self) {
-        self.0 = 0;
+        self.counter = 0;
     }
 
     pub fn yield_now(&mut self) -> bool {
-        if self.0 > 10 {
+        if self.counter >= 10 {
             return false;
         }
 
-        self.0 += 1;
-        if self.0 <= 3 {
-            (0..(1 << self.0)).for_each(|_| std::sync::atomic::spin_loop_hint());
+        self.counter += 1;
+        if self.counter <= 3 {
+            (0..(1 << self.counter)).for_each(|_| std::sync::atomic::spin_loop_hint());
         } else {
             #[cfg(windows)]
-            unsafe { super::sys::Sleep(0) };
+            unsafe {
+                super::sys::Sleep(0)
+            };
             #[cfg(not(windows))]
             std::thread::yield_now();
         }
