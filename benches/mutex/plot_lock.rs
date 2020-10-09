@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::util::{Parker, SpinWait};
+use super::util::{Parker, SpinWait, Instant};
 use std::{
     cell::{Cell, UnsafeCell},
     ptr::NonNull,
-    time::{Duration, Instant},
+    time::Duration,
     sync::atomic::{AtomicU8, Ordering},
 };
 

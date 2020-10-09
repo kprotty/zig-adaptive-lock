@@ -29,6 +29,7 @@ mod windows {
         pub fn Sleep(dwMillisecond: u32);
         pub fn GetModuleHandleA(p: *const u8) -> usize;
         pub fn GetProcAddress(dll: usize, p: *const u8) -> usize;
+        pub fn QueryPerformanceCounter(p: *mut u64) -> i32;
     }
 }
 

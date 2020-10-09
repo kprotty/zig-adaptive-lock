@@ -19,3 +19,6 @@ pub use spin_wait::SpinWait;
 
 mod parker;
 pub use parker::Parker;
+
+mod instant;
+pub use instant::Instant;
