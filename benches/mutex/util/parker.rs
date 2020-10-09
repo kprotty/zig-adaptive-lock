@@ -12,37 +12,184 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{
-    sync::atomic::{AtomicBool, Ordering},
-    thread,
-};
+#[cfg(windows)]
+pub use windows::Parker;
 
-pub struct Parker {
-    notified: AtomicBool,
-    thread: thread::Thread,
-}
+#[cfg(windows)]
+mod windows {
+    use super::super::sys;
+    use std::{mem::transmute, sync::atomic::{AtomicU32, AtomicUsize, Ordering}};
 
-impl Parker {
-    pub fn new() -> Self {
-        Self {
-            notified: AtomicBool::new(false),
-            thread: thread::current(),
+    static WAIT_FN: AtomicUsize = AtomicUsize::new(0);
+    static WAKE_FN: AtomicUsize = AtomicUsize::new(0);
+    type KeyedEventFn = extern "system" fn(usize, usize, u32, usize) -> u32;
+
+    pub struct Parker(AtomicU32);
+
+    impl Parker {
+        pub const IS_CHEAP_TO_CONSTRUCT: bool = true;
+
+        pub fn new() -> Self {
+            Self(AtomicU32::new(0))
+        }
+
+        #[inline]
+        pub fn prepare(&self) {
+            self.0.store(0, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn park(&self) {
+            if self.0.swap(1, Ordering::Acquire) == 0 {
+                unsafe { self.park_slow() };
+            }
+        }
+
+        #[inline]
+        pub fn unpark(&self) {
+            if self.0.swap(1, Ordering::Release) != 0 {
+                unsafe { self.unpark_slow() };
+            }
+        }
+
+        #[cold]
+        unsafe fn park_slow(&self) {
+            let mut wait_fn_ptr = WAIT_FN.load(Ordering::Relaxed);
+            if wait_fn_ptr == 0 {
+                Self::load_fn_ptr();
+                wait_fn_ptr = WAIT_FN.load(Ordering::Relaxed);
+            }
+            let wait_fn: KeyedEventFn = transmute(wait_fn_ptr);
+            let _ = wait_fn(0, &self.0 as *const _ as usize, 0, 0);
+        }
+
+        #[cold]
+        unsafe fn unpark_slow(&self) {
+            let mut wake_fn_ptr = WAKE_FN.load(Ordering::Relaxed);
+            if wake_fn_ptr == 0 {
+                Self::load_fn_ptr();
+                wake_fn_ptr = WAKE_FN.load(Ordering::Relaxed);
+            }
+            let wake_fn: KeyedEventFn = transmute(wake_fn_ptr);
+            let _ = wake_fn(0, &self.0 as *const _ as usize, 0, 0);
+        }
+
+        #[cold]
+        unsafe fn load_fn_ptr() {
+            let dll = sys::GetModuleHandleA(b"ntdll.dll\0".as_ptr());
+            assert_ne!(dll, 0, "failed to load ntdll.dll");
+
+            let wait_fn = sys::GetProcAddress(dll, b"NtWaitForKeyedEvent\0".as_ptr());
+            assert_ne!(wait_fn, 0, "failed to load NtWaitForKeyedEvent");
+
+            let wake_fn = sys::GetProcAddress(dll, b"NtReleaseKeyedEvent\0".as_ptr());
+            assert_ne!(wake_fn, 0, "failed to load NtReleaseKeyedEvent");
+
+            WAIT_FN.store(wait_fn, Ordering::Relaxed);
+            WAKE_FN.store(wake_fn, Ordering::Relaxed);
         }
     }
+}
 
-    pub fn reset(&self) {
-        self.notified.store(false, Ordering::Relaxed);
-    }
+#[cfg(target_os = "linux")]
+pub use linux::Parker;
 
-    pub fn park(&self) {
-        while !self.notified.load(Ordering::Acquire) {
-            thread::park();
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::super::sys;
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    pub struct Parker(AtomicI32);
+
+    impl Parker {
+        pub const IS_CHEAP_TO_CONSTRUCT: bool = true;
+        
+        pub fn new() -> Self {
+            Self(AtomicI32::new(0))
+        }
+
+        #[inline]
+        pub fn prepare(&self) {
+            self.0.store(0, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn park(&self) {
+            while self.0.load(Ordering::Acquire) == 0 {
+                unsafe { self.futex_wait() };
+            }
+        }
+
+        #[inline]
+        pub fn unpark(&self) {
+            self.0.store(1, Ordering::Release);
+            unsafe { self.futex_wake() };
+        }
+
+        #[cold]
+        unsafe fn futex_wait(&self) {
+            let _ = sys::syscall(
+                sys::SYS_FUTEX,
+                &self.0 as *const _ as usize,
+                sys::FUTEX_PRIVATE_FLAG | sys::FUTEX_WAIT,
+                0i32,
+                0usize,
+            );
+        }
+
+        #[cold]
+        unsafe fn futex_wake(&self) {
+            let _ = sys::syscall(
+                sys::SYS_FUTEX,
+                &self.0 as *const _ as usize,
+                sys::FUTEX_PRIVATE_FLAG | sys::FUTEX_WAKE,
+                1i32,
+            );
         }
     }
+}
 
-    pub fn unpark(&self) {
-        let thread = self.thread.clone();
-        self.notified.store(true, Ordering::Release);
-        thread.unpark();
+#[cfg(all(unix, not(target_os = "linux")))]
+pub use posix::Parker;
+
+#[cfg(all(unix, not(target_os = "linux")))]
+mod posix {
+    use std::{
+        sync::atomic::{AtomicBool, Ordering},
+        thread,
+    };
+    
+    pub struct Parker {
+        notified: AtomicBool,
+        thread: thread::Thread,
+    }
+    
+    impl Parker {
+        pub const IS_CHEAP_TO_CONSTRUCT: bool = false;
+
+        pub fn new() -> Self {
+            Self {
+                notified: AtomicBool::new(false),
+                thread: thread::current(),
+            }
+        }
+    
+        pub fn prepare(&self) {
+            self.notified.store(false, Ordering::Relaxed);
+        }
+    
+        pub fn park(&self) {
+            while !self.notified.load(Ordering::Acquire) {
+                thread::park();
+            }
+        }
+    
+        pub fn unpark(&self) {
+            let thread = self.thread.clone();
+            self.notified.store(true, Ordering::Release);
+            thread.unpark();
+        }
     }
 }
+
+

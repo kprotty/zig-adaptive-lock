@@ -42,17 +42,23 @@ impl Waiter {
         }
     }
 
+    #[inline(always)]
     fn with<T>(f: impl FnOnce(&Waiter) -> T) -> T {
+        let mut ptr = std::ptr::null();
+
+        if !Parker::IS_CHEAP_TO_CONSTRUCT {
+            thread_local!(static WAITER: Waiter = Waiter::new());
+            if let Ok(waiter_ptr) = WAITER.try_with(|x| x as *const Waiter) {
+                ptr = waiter_ptr;
+            }
+        }
+
         let mut stack_waiter = None;
-        thread_local!(static WAITER: Waiter = Waiter::new());
+        if ptr.is_null() {
+            ptr = stack_waiter.get_or_insert_with(Waiter::new);
+        }
         
-        let waiter_ptr = WAITER
-            .try_with(|x| x as *const Waiter)
-            .unwrap_or_else(|_| {
-                stack_waiter.get_or_insert_with(Waiter::new)
-            });
-        
-        f(unsafe { &*waiter_ptr })
+        f(unsafe { &*ptr })
     }
 }
 
@@ -114,7 +120,7 @@ impl Lock {
             }
 
             Waiter::with(|waiter| {
-                waiter.parker.reset();
+                waiter.parker.prepare();
                 waiter.prev.set(None);
                 waiter.next.set(head);
                 waiter.tail.set(match head {

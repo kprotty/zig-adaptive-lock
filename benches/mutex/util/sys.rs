@@ -27,6 +27,8 @@ mod windows {
         pub fn AcquireSRWLockExclusive(p: *mut SRWLOCK);
         pub fn ReleaseSRWLockExclusive(p: *mut SRWLOCK);
         pub fn Sleep(dwMillisecond: u32);
+        pub fn GetModuleHandleA(p: *const u8) -> usize;
+        pub fn GetProcAddress(dll: usize, p: *const u8) -> usize;
     }
 }
 
@@ -36,11 +38,15 @@ pub use linux::*;
 #[cfg(target_os = "linux")]
 mod linux {
     #[cfg(target_arch = "x86_64")]
-    pub const SYS_FUTEX: u16 = 202;
+    pub const SYS_FUTEX: i32 = 202;
     #[cfg(target_arch = "x86")]
-    pub const SYS_FUTEX: u16 = 240;
+    pub const SYS_FUTEX: i32 = 240;
     #[cfg(target_arch = "aarch64")]
-    pub const SYS_FUTEX: u16 = 98;
+    pub const SYS_FUTEX: i32 = 98;
+
+    pub const FUTEX_WAIT: i32 = 0;
+    pub const FUTEX_WAKE: i32 = 1;
+    pub const FUTEX_PRIVATE_FLAG: i32 = 128;
 
     #[link(name = "c")]
     extern "C" {

@@ -101,7 +101,7 @@ impl Lock {
                         return false;
                     }
                     
-                    waiter.parker.reset();
+                    waiter.parker.prepare();
                     waiter.next.set(None);
                     waiter.acquired.set(false);
                     waiter.address.set(address);
@@ -248,6 +248,7 @@ impl Waiter {
         }
     }
 
+    #[inline(always)]
     fn with<T>(f: impl FnOnce(&Waiter) -> T) -> T {
         let mut stack_waiter = None;
         thread_local!(static WAITER: Waiter = Waiter::new());
