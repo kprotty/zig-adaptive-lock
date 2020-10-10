@@ -143,8 +143,9 @@ impl Lock {
                 waiter.parker.park();
                 spin.reset();
 
-                self.state.fetch_and(!WAKING, Ordering::Relaxed);
-                state = self.state.load(Ordering::Relaxed);
+                // self.state.fetch_and(!WAKING, Ordering::Relaxed);
+                // state = self.state.load(Ordering::Relaxed);
+                state = self.state.fetch_sub(WAKING, Ordering::Relaxed) - WAKING;
             });
         }
     }
