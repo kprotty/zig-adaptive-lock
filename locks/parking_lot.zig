@@ -18,7 +18,7 @@ const utils = @import("../utils.zig");
 pub const Lock = extern struct {
     pub const name = "parking_lot";
 
-    state: u8 = UNLOCKED,
+    state: u16 = UNLOCKED,
 
     const UNLOCKED = 0;
     const LOCKED = 1;
@@ -33,14 +33,13 @@ pub const Lock = extern struct {
     }
 
     pub fn acquire(self: *Lock) void {
-        if (@cmpxchgWeak(
-            u8,
-            &self.state,
-            UNLOCKED,
-            LOCKED,
-            .Acquire,
-            .Monotonic,
-        )) |_| {
+        const acquired = asm volatile(
+            "lock btsw $0, %[ptr]"
+            : [ret] "={@ccc}" (-> u8),
+            : [ptr] "*m" (&self.state)
+            : "cc", "memory"
+        ) == 0;
+        if (!acquired) {
             self.acquireSlow();
         }
     }
@@ -49,29 +48,31 @@ pub const Lock = extern struct {
         @setCold(true);
 
         var spin = utils.SpinWait{};
-        var state = @atomicLoad(u8, &self.state, .Monotonic);
+        var state = @atomicLoad(u16, &self.state, .Monotonic);
 
         while (true) {
             if (state & LOCKED == 0) {
-                state = @cmpxchgWeak(
-                    u8,
-                    &self.state,
-                    state,
-                    state | LOCKED,
-                    .Acquire,
-                    .Monotonic,
-                ) orelse return;
+                const acquired = asm volatile(
+                    "lock btsw $0, %[ptr]"
+                    : [ret] "={@ccc}" (-> u8),
+                    : [ptr] "*m" (&self.state)
+                    : "cc", "memory"
+                ) == 0;
+                if (acquired)
+                    return;
+                utils.yieldThread(1);
+                state = @atomicLoad(u16, &self.state, .Monotonic);
                 continue;
             }
 
             if (state & PARKED == 0) {
                 if (spin.yield()) {
-                    state = @atomicLoad(u8, &self.state, .Monotonic);
+                    state = @atomicLoad(u16, &self.state, .Monotonic);
                     continue;
                 }
 
                 if (@cmpxchgWeak(
-                    u8,
+                    u16,
                     &self.state,
                     state,
                     state | PARKED,
@@ -87,11 +88,11 @@ pub const Lock = extern struct {
             const bucket = Bucket.get(addr);
             bucket.lock.acquire();
 
-            state = @atomicLoad(u8, &self.state, .Monotonic);
+            state = @atomicLoad(u16, &self.state, .Monotonic);
             if (state != (PARKED | LOCKED)) {
                 bucket.lock.release();
                 spin.reset();
-                state = @atomicLoad(u8, &self.state, .Monotonic);
+                state = @atomicLoad(u16, &self.state, .Monotonic);
                 continue;
             }
 
@@ -115,13 +116,13 @@ pub const Lock = extern struct {
                 return;
 
             spin.reset();
-            state = @atomicLoad(u8, &self.state, .Monotonic);
+            state = @atomicLoad(u16, &self.state, .Monotonic);
         }
     }
 
     pub fn release(self: *Lock) void {
         if (@cmpxchgWeak(
-            u8,
+            u16,
             &self.state,
             LOCKED,
             UNLOCKED,
@@ -135,10 +136,10 @@ pub const Lock = extern struct {
     fn releaseSlow(self: *Lock) void {
         @setCold(true);
 
-        var state = @atomicLoad(u8, &self.state, .Monotonic);
+        var state = @atomicLoad(u16, &self.state, .Monotonic);
         while (state == LOCKED) {
             state = @cmpxchgWeak(
-                u8,
+                u16,
                 &self.state,
                 state,
                 UNLOCKED,
@@ -182,8 +183,7 @@ pub const Lock = extern struct {
             //         x ^= x >> 17;
             //         x ^= x << 5;
             //         bucket.prng = x;
-            //         var timeout = x % (500 * std.time.ns_per_us);
-            //         timeout += 500 * std.time.ns_per_us;
+            //         var timeout = x % (1 * std.time.ns_per_ms);
             //         bucket.timed_out = now + timeout;
             //     }
             //     break :blk be_fair;
@@ -192,13 +192,13 @@ pub const Lock = extern struct {
             w.acquired = be_fair;
             if (be_fair) {
                 if (!has_more)
-                    @atomicStore(u8, &self.state, LOCKED, .Monotonic);
+                    @atomicStore(u16, &self.state, LOCKED, .Monotonic);
             } else  {
                 state = if (has_more) PARKED else UNLOCKED;
-                @atomicStore(u8, &self.state, state, .Release);
+                @atomicStore(u16, &self.state, state, .Release);
             }
         } else {
-            @atomicStore(u8, &self.state, UNLOCKED, .Release);
+            @atomicStore(u16, &self.state, UNLOCKED, .Release);
         }
 
         bucket.lock.release();

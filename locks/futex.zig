@@ -60,38 +60,76 @@ pub fn FutexLock(comptime Futex: type) type {
             @setCold(true);
 
             var spin = utils.SpinWait{};
+            var new_state = acquire_state;
+            var state = @atomicLoad(State, &self.state, .Monotonic);
+
             while (true) {
-                const state = @atomicLoad(State, &self.state, .Monotonic);
                 if (state == .unlocked) {
-                    _ = @cmpxchgWeak(
+                    state = @cmpxchgWeak(
                         State,
                         &self.state,
-                        .unlocked,
-                        acquire_state,
+                        state,
+                        new_state,
                         .Acquire,
                         .Monotonic,
                     ) orelse return;
-                } else if (state == .parked) {
-                    utils.yieldThread(1);
-                    break;
+                    continue;
                 }
-                if (!spin.yield()) {
-                    break;
-                }
-            }
 
-            while (true) {
-                const state = @atomicLoad(State, &self.state, .Monotonic);
                 if (state != .parked) {
-                    if (@atomicRmw(State, &self.state, .Xchg, .parked, .Acquire) == .unlocked) {
-                        return;
+                    if (spin.yield()) {
+                        state = @atomicLoad(State, &self.state, .Monotonic);
+                        continue;
                     }
+
+                    new_state = .parked;
+                    state = @atomicRmw(State, &self.state, .Xchg, new_state, .Acquire);
+                    if (state == .unlocked)
+                        return;
                 }
+
                 self.futex.wait(
                     @ptrCast(*const i32, &self.state),
                     @enumToInt(State.parked),
                 );
+
+                spin.reset();
+                state = @atomicLoad(State, &self.state, .Monotonic);
             }
+
+
+            // while (true) {
+            //     const state = @atomicLoad(State, &self.state, .Monotonic);
+            //     if (state == .unlocked) {
+            //         _ = @cmpxchgWeak(
+            //             State,
+            //             &self.state,
+            //             .unlocked,
+            //             acquire_state,
+            //             .Acquire,
+            //             .Monotonic,
+            //         ) orelse return;
+            //     } else if (state == .parked) {
+            //         utils.yieldThread(1);
+            //         break;
+            //     }
+            //     if (!spin.yield()) {
+            //         break;
+            //     }
+            // }
+
+            // while (true) {
+            //     const state = @atomicLoad(State, &self.state, .Monotonic);
+            //     if (state != .parked) {
+            //         if (@atomicRmw(State, &self.state, .Xchg, .parked, .Acquire) == .unlocked) {
+            //             return;
+            //         }
+            //     }
+            //     self.futex.wait(
+            //         @ptrCast(*const i32, &self.state),
+            //         @enumToInt(State.parked),
+            //     );
+            // }
         }
 
         pub fn release(self: *Self) void {
@@ -216,7 +254,7 @@ pub const GenericFutex = extern struct {
     
     const Futex = @This();
 
-    const WordLock = @import("./word_lock_waking.zig").Lock;
+    const WordLock = @import("./webkit_wordlock.zig").Lock;
     
     const Waiter = struct {
         next: ?*Waiter,

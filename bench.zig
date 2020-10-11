@@ -18,11 +18,13 @@ const locks = .{
     "spin",
     // "ticket",
     "os",
-    "futex",
+    "std",
+    // "futex",
+    // "raw_futex",
     "parking_lot",
-    // "word_lock",
+    "word_lock",
     "word_lock_waking",
-    //"webkit_wordlock",
+    "webkit_wordlock",
 };
 
 fn help() void {
