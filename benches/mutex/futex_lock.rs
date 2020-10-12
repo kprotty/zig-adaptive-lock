@@ -110,10 +110,15 @@ impl<F: Futex> FutexLock<F> {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 pub type OsFutex = windows::Futex;
+
 #[cfg(target_os = "linux")]
+#[allow(dead_code)]
 pub type OsFutex = linux::Futex;
+
 #[cfg(not(any(windows, target_os = "linux")))]
+#[allow(dead_code)]
 pub type OsFutex = generic::Futex;
 
 #[cfg(windows)]

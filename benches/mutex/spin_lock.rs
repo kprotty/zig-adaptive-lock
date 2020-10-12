@@ -32,13 +32,17 @@ unsafe impl super::Lock for Lock {
 
 impl Lock {
     fn acquire(&self) {
-        let mut locked = false;
+        let mut spin = 0;
         loop {
-            if !locked && !self.0.swap(true, Ordering::Acquire) {
+            if !self.0.swap(true, Ordering::Acquire) {
                 return;
             }
-            std::sync::atomic::spin_loop_hint();
-            locked = self.0.load(Ordering::Relaxed);
+            spin += 1;
+            if spin % 3 == 0 {
+                std::thread::yield_now();
+            } else {
+                (0..((1 << spin).min(30))).for_each(|_| std::sync::atomic::spin_loop_hint());
+            }
         }
     }
 

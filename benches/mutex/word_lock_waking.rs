@@ -29,6 +29,7 @@ struct Waiter {
     prev: Cell<Option<NonNull<Self>>>,
     next: Cell<Option<NonNull<Self>>>,
     tail: Cell<Option<NonNull<Self>>>,
+    waiters: Cell<usize>,
     parker: Parker,
 }
 
@@ -38,6 +39,7 @@ impl Waiter {
             prev: Cell::new(None),
             next: Cell::new(None),
             tail: Cell::new(None),
+            waiters: Cell::new(0),
             parker: Parker::new(),
         }
     }
@@ -123,6 +125,7 @@ impl Lock {
 
             Waiter::with(|waiter| {
                 waiter.parker.prepare();
+                waiter.waiters.set(1);
                 waiter.prev.set(None);
                 waiter.next.set(head);
                 waiter.tail.set(match head {
@@ -142,10 +145,12 @@ impl Lock {
 
                 waiter.parker.park();
                 spin.reset();
-
-                // self.state.fetch_and(!WAKING, Ordering::Relaxed);
-                // state = self.state.load(Ordering::Relaxed);
-                state = self.state.fetch_sub(WAKING, Ordering::Relaxed) - WAKING;
+                
+                if waiter.waiters.get() == 0 {
+                    state = self.state.load(Ordering::Relaxed);
+                } else {
+                    state = self.state.fetch_sub(WAKING, Ordering::Relaxed) - WAKING;
+                }
             });
         }
     }
@@ -187,12 +192,16 @@ impl Lock {
                 let tail = head.as_ref().tail.get();
                 let tail = tail.unwrap_or_else(|| {
                     let mut current = head;
+                    let mut waiters = 0;
                     loop {
                         let next = current.as_ref().next.get();
                         let next = next.expect("no next link in waiter queue");
                         next.as_ref().prev.set(Some(current));
                         current = next;
+                        waiters += 1;
                         if let Some(tail) = current.as_ref().tail.get() {
+                            waiters += tail.as_ref().waiters.get();
+                            tail.as_ref().waiters.set(waiters);
                             head.as_ref().tail.set(Some(tail));
                             break tail;
                         }
@@ -211,15 +220,31 @@ impl Lock {
                     }
                     continue;
                 }
+                
+                let waiters = tail.as_ref().waiters.get();
+                let waiters = std::num::NonZeroUsize::new_unchecked(waiters);
+                let should_wake = {
+                    match waiters.get() {
+                        0 => unreachable!(),
+                        1 => false,
+                        x => x % 2 == 0,
+                    }
+                };
 
                 match tail.as_ref().prev.get() {
                     Some(new_tail) => {
                         head.as_ref().tail.set(Some(new_tail));
-                        std::sync::atomic::fence(Ordering::Release);
+                        new_tail.as_ref().waiters.set(waiters.get() - 1);
+
+                        if should_wake {
+                            std::sync::atomic::fence(Ordering::Release);
+                        } else {
+                            self.state.fetch_and(!WAKING, Ordering::Release);
+                        }
                     }
                     _ => match self.state.compare_exchange_weak(
                         state,
-                        WAKING,
+                        if should_wake { WAKING } else { UNLOCKED as usize },
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     ) {
@@ -231,6 +256,7 @@ impl Lock {
                     },
                 }
 
+                tail.as_ref().waiters.set(if should_wake { waiters.get() } else { 0 });
                 tail.as_ref().parker.unpark();
                 return;
             }

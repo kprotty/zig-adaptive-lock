@@ -24,7 +24,8 @@ unsafe impl super::Lock for Lock {
     }
 
     fn with(&self, f: impl FnOnce()) {
-        let _ = self.0.lock();
+        let guard = self.0.lock();
         f();
+        std::mem::drop(guard);
     }
 }

@@ -26,12 +26,18 @@ impl SpinWait {
     }
 
     pub fn yield_now(&mut self) -> bool {
-        if self.counter >= 6 {
+        if self.counter >= 10 {
             return false;
         }
 
-        (0..(1 << self.counter)).for_each(|_| std::sync::atomic::spin_loop_hint());
         self.counter += 1;
+        if self.counter <= 3 {
+            (0..(1 << self.counter)).for_each(|_| std::sync::atomic::spin_loop_hint());
+        } else if cfg!(windows) {
+            std::thread::sleep(std::time::Duration::new(0, 0));
+        } else {
+            std::thread::yield_now();
+        }
 
         true
     }
