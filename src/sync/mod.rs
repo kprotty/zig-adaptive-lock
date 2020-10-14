@@ -12,9 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Miscellanious tools to aid in writing concurrent data structures
-
-mod cache_padded;
-pub use cache_padded::CachePadded;
-
-pub(crate) mod sync;
+mod lock;
+pub use lock::{Lock, LockFuture, LockGuard};

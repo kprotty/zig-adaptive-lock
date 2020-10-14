@@ -19,7 +19,7 @@
 //! relatively cheap resource like compute time over relatively expensive
 //! resources like memory.
 
-#![cfg_attr(not(any(test, loom)), no_std)]
+#![cfg_attr(not(any(test, feature = "std", feature = "loom")), no_std)]
 #![cfg_attr(
     feature = "nightly",
     feature(doc_cfg, llvm_asm, target_has_atomics, core_intrinsics)
@@ -32,4 +32,7 @@
 )]
 
 pub mod parker;
+
 pub mod utils;
+
+pub mod sync;

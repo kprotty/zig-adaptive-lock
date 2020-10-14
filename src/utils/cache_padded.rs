@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use core::ops::{Deref, DerefMut};
+use core::{
+    fmt,
+    ops::{Deref, DerefMut},
+};
 
 /// Pads and aligns a value to the estimated size of a cache line.
 ///
@@ -26,7 +29,7 @@ use core::ops::{Deref, DerefMut};
 /// to keep it on its own cache line to the best of its ability.
 ///
 /// [false-sharing]: https://en.wikipedia.org/wiki/False_sharing
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Default, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Default, Hash)]
 // Cache lines on architectures like the s390x are assumed to be 256 bytes wide.
 // Some 64-bit architectures also access cache lines in sizes of 128 bytes:
 //
@@ -75,6 +78,12 @@ pub struct CachePadded<T>(T);
 
 unsafe impl<T: Send> Send for CachePadded<T> {}
 unsafe impl<T: Sync> Sync for CachePadded<T> {}
+
+impl<T: fmt::Debug> fmt::Debug for CachePadded<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        (&&*self).fmt(f)
+    }
+}
 
 impl<T> From<T> for CachePadded<T> {
     fn from(value: T) -> Self {
