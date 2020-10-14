@@ -13,6 +13,10 @@ fn main() {
     if compiles("pub use core::sync::atomic::AtomicU8;").is_some() {
         println!("cargo:rustc-cfg=target_atomic_u8");
     }
+
+    if compiles("pub use core::sync::atomic::AtomicBool;").is_some() {
+        println!("cargo:rustc-cfg=target_atomic_bool");
+    }
 }
 
 fn compiles(code: &str) -> Option<()> {

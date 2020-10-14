@@ -14,3 +14,48 @@
 
 //! Contains core primitives which pause & unpause the caller's OS thread execution.
 //! These serve as the building block for all other data structures in the library.
+
+use core::{ops::Add, time::Duration};
+
+pub unsafe trait Parker {
+    type Instant: Copy + PartialOrd + Add<Duration, Output = Self::Instant>;
+
+    fn now() -> Self::Instant;
+
+    fn yield_now(iteration: Option<usize>) -> bool;
+
+    fn new() -> Self;
+
+    fn prepare(&self);
+
+    fn park(&self);
+
+    fn try_park_until(&self, deadline: Self::Instant) -> bool;
+
+    fn unpark(&self);
+}
+
+#[cfg(any(feature = "os", feature = "std"))]
+pub type DefaultParker = SystemParker;
+#[cfg(not(any(feature = "os", feature = "std")))]
+pub type DefaultParker = SpinParker;
+
+#[cfg(all(feature = "std", not(feature = "os")))]
+pub type SystemParker = StdParker;
+#[cfg(all(feature = "os", not(feature = "std")))]
+pub type SystemParker = OsParker;
+#[cfg(any(feature = "std", feature = "os"))]
+pub type SystemParker = StdParker; // OsParker;
+
+mod spin_parker;
+pub use spin_parker::SpinParker;
+
+#[cfg(feature = "std")]
+mod std_parker;
+#[cfg(feature = "std")]
+pub use std_parker::StdParker;
+
+// #[cfg(feature = "os")]
+// mod os_parker;
+// #[cfg(feature = "os")]
+// pub use os_parker::OsParker;
