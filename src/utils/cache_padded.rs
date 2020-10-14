@@ -14,6 +14,32 @@
 
 use core::ops::{Deref, DerefMut};
 
+/// Pads and aligns a value to the estimated size of a cache line.
+///
+/// Under many CPUs, memory is read and written in large blocks called cache lines.
+/// This means that atomic operations on a value can cause the entire cache line the
+/// value resides in to incur the cost of cache synchronization. This is otherwise
+/// known as [false sharing](#false-sharing) and can be mitigated by putting synchronized
+/// values on their own cache lines to prevent cache invalidations of unrelated memory.
+///
+/// This type is useful in that regard as it provides a generic wrapper around data
+/// to keep it on its own cache line to the best of its ability.
+///
+/// [false-sharing]: https://en.wikipedia.org/wiki/False_sharing
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Default, Hash)]
+// Cache lines on architectures like the s390x are assumed to be 256 bytes wide.
+// Some 64-bit architectures also access cache lines in sizes of 128 bytes:
+//
+// - On Intel chips starting from Sandy Bridge, the spatial prefetcher can access
+//   64-byte pairs of cache lines at a time when storing to L2 cache.
+//      * https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-optimization-manual.pdf
+//      * https://github.com/facebook/folly/blob/1b5288e6eea6df074758f877c849b6e73bbb9fbb/folly/lang/Align.h#L107
+//
+// - On ARM64 big.LITTLE arch, there can be "big" cores which have 128 byte wide cache lines.
+//      * https://www.mono-project.com/news/2016/09/12/arm64-icache/
+//
+// Other cache line sizes are collectively derived from other projects:
+//      * https://golang.org/search?q=CacheLinePadSize
 #[cfg_attr(target_arch = "s390x", repr(align(256)))]
 #[cfg_attr(
     any(
@@ -45,7 +71,6 @@ use core::ops::{Deref, DerefMut};
     )),
     repr(align(64))
 )]
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Default, Hash)]
 pub struct CachePadded<T>(T);
 
 unsafe impl<T: Send> Send for CachePadded<T> {}
