@@ -26,16 +26,16 @@ use std::{
 mod util;
 
 mod futex_lock;
+mod keyed_lock;
 mod os_lock;
 mod parking_lot_lock;
 mod plot_lock;
 mod simple_mutex_lock;
 mod spin_lock;
+mod sym_lock;
 mod word_lock;
 mod word_lock_fair;
 mod word_lock_waking;
-mod keyed_lock;
-mod sym_lock;
 
 fn bench_all(b: &mut Benchmarker) {
     // b.bench::<spin_lock::Lock>();

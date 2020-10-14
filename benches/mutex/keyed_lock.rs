@@ -12,8 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{cell::Cell, ptr::NonNull, sync::atomic::{AtomicUsize, AtomicU8, Ordering}};
-use super::util::{SpinWait, Parker};
+use super::util::{Parker, SpinWait};
+use std::{
+    cell::Cell,
+    ptr::NonNull,
+    sync::atomic::{AtomicU8, AtomicUsize, Ordering},
+};
 
 const UNLOCKED: u8 = 0;
 const LOCKED: u8 = 1;
@@ -63,7 +67,7 @@ impl Lock {
     fn try_acquire(&self) -> bool {
         self.byte_state().swap(LOCKED, Ordering::Acquire) == UNLOCKED
     }
-    
+
     #[inline]
     fn acquire(&self) {
         if !self.try_acquire() {
@@ -117,7 +121,7 @@ impl Lock {
         let state = self.state.load(Ordering::Relaxed);
         if (state >= WAITING) && (state & WAKING == 0) {
             self.release_slow();
-        } 
+        }
     }
 
     #[cold]

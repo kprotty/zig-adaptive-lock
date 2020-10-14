@@ -145,7 +145,7 @@ impl Lock {
 
                 waiter.parker.park();
                 spin.reset();
-                
+
                 if waiter.waiters.get() == 0 {
                     state = self.state.load(Ordering::Relaxed);
                 } else {
@@ -220,7 +220,7 @@ impl Lock {
                     }
                     continue;
                 }
-                
+
                 let waiters = tail.as_ref().waiters.get();
                 let waiters = std::num::NonZeroUsize::new_unchecked(waiters);
                 let should_wake = {
@@ -244,7 +244,11 @@ impl Lock {
                     }
                     _ => match self.state.compare_exchange_weak(
                         state,
-                        if should_wake { WAKING } else { UNLOCKED as usize },
+                        if should_wake {
+                            WAKING
+                        } else {
+                            UNLOCKED as usize
+                        },
                         Ordering::AcqRel,
                         Ordering::Acquire,
                     ) {
@@ -256,7 +260,9 @@ impl Lock {
                     },
                 }
 
-                tail.as_ref().waiters.set(if should_wake { waiters.get() } else { 0 });
+                tail.as_ref()
+                    .waiters
+                    .set(if should_wake { waiters.get() } else { 0 });
                 tail.as_ref().parker.unpark();
                 return;
             }

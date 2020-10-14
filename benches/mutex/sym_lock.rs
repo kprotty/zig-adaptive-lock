@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::util::{Parker, Instant};
+use super::util::{Instant, Parker};
 use std::{
-    ptr::NonNull,
     cell::{Cell, UnsafeCell},
+    ptr::NonNull,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -74,7 +74,8 @@ impl Lock {
     fn with_inner<T>(&self, f: impl FnOnce(&mut Inner) -> T) -> T {
         use super::Lock;
         let mut result = None;
-        self.lock.with(|| result = Some(f(unsafe { &mut *self.inner.get() })));
+        self.lock
+            .with(|| result = Some(f(unsafe { &mut *self.inner.get() })));
         result.unwrap()
     }
 
@@ -108,7 +109,7 @@ impl Lock {
                 }
                 continue;
             }
-            
+
             if state & PARKED == 0 {
                 if spin < 10 {
                     spin += 1;
@@ -156,9 +157,9 @@ impl Lock {
                     tail.as_ref().next.set(Some(NonNull::from(waiter_ref)));
                 } else {
                     inner.head = Some(NonNull::from(waiter_ref));
-                    waiter_ref.tail.set(NonNull::from(waiter_ref)); 
+                    waiter_ref.tail.set(NonNull::from(waiter_ref));
                 }
-                
+
                 waiter_ref.parker.prepare();
                 true
             });
@@ -204,19 +205,20 @@ impl Lock {
                     let now = Instant::now();
                     now > inner.fair_at && {
                         waiter.as_ref().acquired.set(true);
-                        inner.fair_at = now + std::time::Duration::new(0, {
-                            let mut x = inner.prng;
-                            x ^= x << 13;
-                            x ^= x >> 17;
-                            x ^= x << 5;
-                            inner.prng = x;
-                            x % 1_000_000
-                        });
+                        inner.fair_at = now
+                            + std::time::Duration::new(0, {
+                                let mut x = inner.prng;
+                                x ^= x << 13;
+                                x ^= x >> 17;
+                                x ^= x << 5;
+                                inner.prng = x;
+                                x % 1_000_000
+                            });
                         true
                     }
                 })
                 .unwrap_or(false);
-            
+
             if be_fair {
                 if !has_more {
                     self.state.store(LOCKED, Ordering::Relaxed);
