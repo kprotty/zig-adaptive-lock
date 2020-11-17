@@ -14,6 +14,8 @@
 
 const std = @import("std");
 const sync = @import("../sync.zig");
+
+const yieldThread = sync.yield;
 const spinLoopHint = sync.spinLoopHint;
 
 pub const Lock = extern struct {
@@ -37,6 +39,8 @@ pub const Lock = extern struct {
 
     fn acquire(self: *Lock) void {
         var locked = false;
+        var spin: std.math.Log2Int(usize) = 0;
+
         while (true) {
             if (!locked) {
                 _ = @cmpxchgWeak(
@@ -49,7 +53,13 @@ pub const Lock = extern struct {
                 ) orelse return;
             }
 
-            spinLoopHint(1);
+            if (spin < 10) {
+                spin += 1;
+                spinLoopHint(@as(usize, 1) << spin);
+            } else {
+                yieldThread();
+            }
+
             locked = @atomicLoad(bool, &self.locked, .Monotonic);
         }
     }
