@@ -36,17 +36,24 @@ mod sym_lock;
 mod word_lock;
 mod word_lock_fair;
 mod word_lock_waking;
+mod flume_lock;
+mod safe_parker;
+mod std_lock;
 
 fn bench_all(b: &mut Benchmarker) {
     // b.bench::<spin_lock::Lock>();
-    b.bench::<sym_lock::Lock>();
+    b.bench::<flume_lock::Lock>();
+
+    // b.bench::<sym_lock::Lock>();
     b.bench::<os_lock::Lock>();
-    b.bench::<simple_mutex_lock::Lock>();
+    b.bench::<std_lock::Lock>();
+    b.bench::<safe_parker::Lock>();
     b.bench::<parking_lot_lock::Lock>();
+    // b.bench::<simple_mutex_lock::Lock>();
     // b.bench::<plot_lock::Lock>();
     // b.bench::<word_lock::Lock>();
     // b.bench::<word_lock_fair::Lock>();
-    b.bench::<word_lock_waking::Lock>();
+    // b.bench::<word_lock_waking::Lock>();
 
     // b.bench::<keyed_lock::Lock>();
 
@@ -150,7 +157,8 @@ impl ArgParser {
         while input.len() > 0 {
             let first = Self::parse_value(&mut input);
             let mut second = None;
-            if let Some(b'-') = input.next() {
+            if let Some(&b'-') = input.peek() {
+                let _ = input.next();
                 second = Some(Self::parse_value(&mut input));
             }
             resolve(&mut results, first, second);

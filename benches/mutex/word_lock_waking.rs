@@ -112,7 +112,8 @@ impl Lock {
                 if self.try_acquire() {
                     return;
                 }
-                std::thread::yield_now();
+                // std::thread::sleep(std::time::Duration::from_micros(1));
+                // std::thread::yield_now();
                 state = self.state.load(Ordering::Relaxed);
                 continue;
             }
