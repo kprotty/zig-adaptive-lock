@@ -15,16 +15,16 @@
 const std = @import("std");
 
 const locks = .{
-    "spin",
-    // "ticket",
+    // "spin",
+    "ticket",
     "os",
     "std",
     // "futex",
     // "raw_futex",
-    "parking_lot",
+    // "parking_lot",
     "word_lock",
     "word_lock_waking",
-    "webkit_wordlock",
+    // "webkit_wordlock",
 };
 
 fn help() void {
@@ -94,7 +94,7 @@ pub fn main() !void {
                         num_threads,
                         work_locked,
                         work_unlocked,
-                        "-" ** 75,
+                        "-" ** 90,
                     });
 
                     const header_result = Result{};
@@ -132,9 +132,15 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
         lock: Lock,
         event: std.ResetEvent align(512),
         is_running: bool,
-        results: []f64 align(512),
+        results: []Res align(512),
         work_locked: WorkUnit,
         work_unlocked: WorkUnit,
+
+        const Res = struct {
+            iters: f64,
+            latency_avg: u64,
+            latency_max: u64,
+        };
         
         const Self = @This();
         const RunInfo = struct {
@@ -146,11 +152,29 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
             const self = run_info.context;
             const result = &self.results[run_info.index];
 
+            var latency_max: u64 = 0;
+            var latency_sum: u64 = 0;
+            var latency_len: u64 = 0;
             var lock_operations: u64 = 0;
-            defer result.* = @intToFloat(f64, lock_operations);
+            
+            defer result.* = Res{
+                .iters = @intToFloat(f64, lock_operations),
+                .latency_avg = latency_sum / latency_len,
+                .latency_max = latency_max,
+            };
 
+            var timer = std.time.Timer.start() catch @panic("no timers available");
             var prng = @as(u64, @ptrToInt(self) ^ @ptrToInt(result));
-            self.event.wait();
+            const timer_overhead = blk: {
+                var sum: u64 = 0;
+                const attempts = 10;
+                for ([_]u0{0} ** attempts) |_| {
+                    const start = timer.read();
+                    _ = timer.read();
+                    sum += timer.read() - start;
+                }
+                break :blk (sum / attempts);
+            };
 
             const base_work_locked = self.work_locked;
             const base_work_unlocked = self.work_unlocked;
@@ -158,24 +182,35 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
             var works_locked = base_work_locked.count(&prng);
             var works_unlocked = base_work_unlocked.count(&prng);
 
+            self.event.wait();
+
             while (@atomicLoad(bool, &self.is_running, .SeqCst)) {
+                const start = timer.read();
                 self.lock.acquire();
+                var latency = timer.read() - start;
+
                 WorkUnit.run(works_locked);
                 
                 self.lock.release();
                 WorkUnit.run(works_unlocked);
 
                 lock_operations += 1;
-
                 if (lock_operations % 32 == 0) {
                     works_locked = base_work_locked.count(&prng);
                     works_unlocked = base_work_unlocked.count(&prng);
                 }
+
+                if (latency == 0)
+                    latency = 1;
+                if (latency > latency_max)
+                    latency_max = latency;
+                latency_sum += latency;
+                latency_len += 1;
             }
         }
     };
 
-    const results = try config.allocator.alloc(f64, config.num_threads);
+    const results = try config.allocator.alloc(Context.Res, config.num_threads);
     defer config.allocator.free(results);
     
     {
@@ -216,13 +251,13 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
     }
 
     var sum: f64 = 0;
-    for (results) |lock_operations|
-        sum += lock_operations;
+    for (results) |result|
+        sum += result.iters;
     const mean = sum / @intToFloat(f64, results.len);
 
     var stdev: f64 = 0;
-    for (results) |lock_operations| {
-        const r = lock_operations - mean;
+    for (results) |result| {
+        const r = result.iters - mean;
         stdev += r * r;
     }
     if (results.len > 1) {
@@ -230,9 +265,31 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
         stdev = @sqrt(stdev);
     }
 
-    std.sort.sort(f64, results, {}, comptime std.sort.asc(f64));
-    const min = results[0];
-    const max = results[results.len - 1];
+    const Sort = struct {
+        fn by(comptime field: []const u8) fn(void, Context.Res, Context.Res) bool {
+            return struct {
+                fn lessThan(_: void, a: Context.Res, b: Context.Res) bool {
+                    return @field(a, field) < @field(b, field);
+                }
+            }.lessThan;
+        }
+    }.by;
+
+    std.sort.sort(Context.Res, results, {}, comptime Sort("iters"));
+    const min = results[0].iters;
+    const max = results[results.len - 1].iters;
+
+    // std.sort.sort(Context.Res, results, {}, comptime Sort("latency_max"));
+    // const lmax = results[results.len - 1].latency_max;
+
+    var lat_avg_sum: u64 = 0;
+    var lat_max_sum: u64 = 0;
+    for (results) |result| {
+        lat_avg_sum += result.latency_avg;
+        lat_max_sum += result.latency_max;
+    }
+    const lavg = lat_avg_sum / @as(u64, results.len);
+    const lmax = lat_max_sum / @as(u64, results.len);
 
     return Result{
         .name = Lock.name,
@@ -241,6 +298,8 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
         .min = min,
         .max = max,
         .sum = sum,
+        .@"tail lat." = lmax,
+        .@"avg. lat." = lavg,
     };
 }
 
@@ -365,6 +424,8 @@ const Result = struct {
     min: ?f64 = null,
     max: ?f64 = null,
     sum: ?f64 = null,
+    @"avg. lat.": ?u64 = null,
+    @"tail lat.": ?u64 = null,
 
     const name_align = 18;
     const val_align = 8;
@@ -395,18 +456,39 @@ const Result = struct {
             "max",
             "sum",
         }) |field, index| {
+            const valign = val_align - 2;
             if (@field(self, field)) |value| {
                 if (value < 1_000) {
-                    try std.fmt.format(writer, " {d:>" ++ toStr(val_align) ++ "} |", .{@round(value)});
+                    try std.fmt.format(writer, " {d:>" ++ toStr(valign) ++ "} |", .{@round(value)});
                 } else if (value < 1_000_000) {
-                    try std.fmt.format(writer, " {d:>" ++ toStr(val_align - 1) ++ ".0}k |", .{value / 1_000});
+                    try std.fmt.format(writer, " {d:>" ++ toStr(valign - 1) ++ ".0}k |", .{value / 1_000});
                 } else if (value < 1_000_000_000) {
-                    try std.fmt.format(writer, " {d:>" ++ toStr(val_align - 1) ++ ".2}m |", .{value / 1_000_000});
+                    try std.fmt.format(writer, " {d:>" ++ toStr(valign - 1) ++ ".2}m |", .{value / 1_000_000});
                 } else {
-                    try std.fmt.format(writer, " {d:>" ++ toStr(val_align - 1) ++ ".2}b |", .{value / 1_000_000_000});
+                    try std.fmt.format(writer, " {d:>" ++ toStr(valign - 1) ++ ".2}b |", .{value / 1_000_000_000});
                 }
             } else {
-                try std.fmt.format(writer, " {s:>" ++ toStr(val_align) ++ "} |", .{field});
+                try std.fmt.format(writer, " {s:>" ++ toStr(valign) ++ "} |", .{field});
+            }
+        }
+
+        inline for ([_][]const u8 {
+            "avg. lat.",
+            "tail lat.",
+        }) |field, index| {
+            const valign = val_align + 1;
+            if (@field(self, field)) |value| {
+                if (value < 1_000) {
+                    try std.fmt.format(writer, " {:>" ++ toStr(valign - 2) ++ "}ns |", .{value});
+                } else if (value < 1_000_000) {
+                    try std.fmt.format(writer, " {d:>" ++ toStr(valign - 2) ++ ".2}us |", .{@intToFloat(f64, value) / 1_000});
+                } else if (value < 1_000_000_000) {
+                    try std.fmt.format(writer, " {d:>" ++ toStr(valign - 2) ++ ".2}ms |", .{@intToFloat(f64, value) / 1_000_000});
+                } else {
+                    try std.fmt.format(writer, " {d:>" ++ toStr(valign - 1) ++ ".2}s |", .{@intToFloat(f64, value) / 1_000_000_000});
+                }
+            } else {
+                try std.fmt.format(writer, " {s:>" ++ toStr(valign) ++ "} |", .{field});
             }
         }
     }

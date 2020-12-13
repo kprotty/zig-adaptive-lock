@@ -192,7 +192,7 @@ pub const WindowsFutex = extern struct {
                 CompareAddress: windows.PVOID,
                 AddressSize: windows.SIZE_T,
                 Timeout: windows.DWORD,
-            ) callconv(.Stdcall) windows.BOOL,
+            ) callconv(std.os.windows.WINAPI) windows.BOOL,
             wait_fn_ptr,
         );
 
@@ -214,7 +214,7 @@ pub const WindowsFutex = extern struct {
         const wake_fn = @intToPtr(
             fn (
                 Address: windows.PVOID,
-            ) callconv(.Stdcall) void,
+            ) callconv(std.os.windows.WINAPI) void,
             wake_fn_ptr,
         );
 

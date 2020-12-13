@@ -27,14 +27,14 @@ pub const is_arm = switch (std.builtin.arch) {
 pub const is_linux = std.builtin.os.tag == .linux;
 pub const is_windows = std.builtin.os.tag == .windows;
 pub const is_darwin = switch (std.builtin.os.tag) {
-    .macosx, .watchos, .tvos, .ios => true,
+    .macos, .watchos, .tvos, .ios => true,
     else => false,
 };
 
 pub const is_posix = std.builtin.link_libc and (switch (std.builtin.os.tag) {
     .linux,
     .minix,
-    .macosx,
+    .macos,
     .watchos,
     .tvos,
     .ios,
@@ -173,14 +173,14 @@ pub const Event =
                 Key: *align(@alignOf(usize)) const c_void,
                 Alertable: windows.BOOLEAN,
                 Timeout: ?*windows.LARGE_INTEGER,
-            ) callconv(.Stdcall) windows.NTSTATUS;
+            ) callconv(std.os.windows.WINAPI) windows.NTSTATUS;
 
             extern "NtDll" fn NtReleaseKeyedEvent(
                 EventHandle: ?windows.HANDLE,
                 Key: *align(@alignOf(usize)) const c_void,
                 Alertable: windows.BOOLEAN,
                 Timeout: ?*windows.LARGE_INTEGER,
-            ) callconv(.Stdcall) windows.NTSTATUS;
+            ) callconv(std.os.windows.WINAPI) windows.NTSTATUS;
         }
     else if (is_posix)
         extern struct {

@@ -42,8 +42,8 @@ pub const Lock =
             const PSRWLOCK = *SRWLOCK;
             const SRWLOCK_INIT: SRWLOCK = 0;
 
-            extern "kernel32" fn AcquireSRWLockExclusive(p: PSRWLOCK) callconv(.Stdcall) void;
-            extern "kernel32" fn ReleaseSRWLockExclusive(p: PSRWLOCK) callconv(.Stdcall) void;
+            extern "kernel32" fn AcquireSRWLockExclusive(p: PSRWLOCK) callconv(std.os.windows.WINAPI) void;
+            extern "kernel32" fn ReleaseSRWLockExclusive(p: PSRWLOCK) callconv(std.os.windows.WINAPI) void;
         }
     else if (utils.is_posix)
         extern struct {
