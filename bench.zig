@@ -130,7 +130,7 @@ const BenchConfig = struct {
 fn bench(comptime Lock: type, config: BenchConfig) !Result {
     const Context = struct {
         lock: Lock,
-        event: std.ResetEvent align(512),
+        event: std.StaticResetEvent align(512),
         is_running: bool,
         results: []Res align(512),
         work_locked: WorkUnit,
@@ -225,8 +225,8 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
         context.lock.init();
         defer context.lock.deinit();
 
-        context.event = std.ResetEvent.init();
-        defer context.event.deinit();
+        context.event = .{};
+        // defer context.event.deinit();
 
         const threads = try config.allocator.alloc(*std.Thread, config.num_threads);
         defer config.allocator.free(threads);
