@@ -59,9 +59,24 @@ fn print(comptime fmt: []const u8, args: anytype) void {
 }
 
 pub fn main() !void {
+    // allocator which can be shared between threads
+    const shared_allocator = blk: {
+        if (std.builtin.link_libc) {
+            break :blk &std.heap.c_allocator;
+        }
+
+        if (utils.is_windows) {
+            const Static = struct { var heap = std.heap.HeapAllocator.init(); };
+            Static.heap.heap_handle = std.os.windows.kernel32.GetProcessHeap() orelse @panic("GetProcessHeap");
+            break :blk &Static.heap.allocator;
+        }
+        
+        const Static = struct { var gpa = std.heap.GeneralPurposeAllocator(.{}){}; };
+        break :blk &Static.gpa.allocator;
+    };
+
     // use an arena allocator for all future allocations
-    const base_allocator = if (std.builtin.link_libc) std.heap.c_allocator else std.heap.page_allocator;
-    var arena = std.heap.ArenaAllocator.init(base_allocator);
+    var arena = std.heap.ArenaAllocator.init(shared_allocator);
     defer arena.deinit();
     const allocator = &arena.allocator;
 
@@ -104,6 +119,7 @@ pub fn main() !void {
                     inline for (locks) |Lock| {
                         const result = try bench(Lock, BenchConfig{
                             .allocator = allocator,
+                            .shared_allocator = shared_allocator,
                             .num_threads = num_threads,
                             .measure = measure,
                             .work_locked = work_locked.scaled(nanos_per_work_unit),
@@ -121,6 +137,7 @@ pub fn main() !void {
 
 const BenchConfig = struct {
     allocator: *std.mem.Allocator,
+    shared_allocator: *std.mem.Allocator,
     num_threads: usize,
     measure: Duration,
     work_locked: WorkUnit,
@@ -131,12 +148,14 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
     const workers = try config.allocator.alloc(Worker, config.num_threads);
     defer config.allocator.free(workers);
 
+    var spawned: usize = 0;
+    defer for (workers[0..spawned]) |*w| w.arena.deinit();
+
     {
         var lock: Lock = undefined;
         lock.init();
         defer lock.deinit();
 
-        var spawned: usize = 0;
         var barrier = Barrier{};
         defer {
             barrier.stop();
@@ -145,7 +164,11 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
         
         const runFn = Worker.getRunner(Lock).run;
         while (spawned < workers.len) : (spawned += 1) {
-            workers[spawned] = .{ .thread = undefined };
+            workers[spawned] = .{
+                .thread = undefined,
+                .arena = std.heap.ArenaAllocator.init(config.shared_allocator),
+                .latencies = std.ArrayList(u64).init(&workers[spawned].arena.allocator),
+            };
             workers[spawned].thread = try std.Thread.spawn(.{}, runFn, .{
                 &workers[spawned],
                 &lock,
@@ -159,18 +182,18 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
         std.time.sleep(config.measure.nanos);
     }
 
+    var latencies = std.ArrayList(u64).init(config.allocator);
+    defer latencies.deinit();
+
     var sum: u64 = 0;
     var max: u64 = 0;
     var min: u64 = std.math.maxInt(u64);
-    var latency_sum: u64 = 0;
-    var latency_max: u64 = 0;
 
     for (workers) |w| {
         sum += w.iters;
         min = std.math.min(min, w.iters);
         max = std.math.max(max, w.iters);
-        latency_sum += w.latency_sum;
-        latency_max = std.math.max(latency_max, w.latency_max);
+        try latencies.appendSlice(w.latencies.items);
     }
 
     const mean = @intToFloat(f64, sum) / @intToFloat(f64, workers.len);
@@ -183,6 +206,21 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
         stdev /= @intToFloat(f64, workers.len - 1);
         stdev = @sqrt(stdev);
     }
+
+    const items = latencies.items;
+    const cmp = comptime std.sort.asc(u64);
+    std.sort.sort(u64, items, {}, cmp);
+
+    var latency_percentiles: [2]u64 = undefined;
+    for ([_]f64{ 50.0, 99.0 }) |percentile, index| {
+        const p = percentile / 100.0;
+        const i = @round(p * @intToFloat(f64, items.len));
+        const v = std.math.min(items.len, @floatToInt(usize, i));
+        latency_percentiles[index] = items[v];
+    }
+
+    const latency_p50 = latency_percentiles[0];
+    const latency_p99 = latency_percentiles[1];
     
     return Result{
         .name = Lock.name,
@@ -191,8 +229,8 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
         .min = @intToFloat(f64, min),
         .max = @intToFloat(f64, max),
         .sum = @intToFloat(f64, sum),
-        .@"tail lat." = latency_max,
-        .@"avg. lat." = latency_sum / sum,
+        .@"lat. <50%" = latency_p50,
+        .@"lat. <99%" = latency_p99,
     };
 }
 
@@ -225,9 +263,9 @@ const Barrier = struct {
 
 const Worker = struct {
     iters: u64 = 0,
-    latency_sum: u64 = 0,
-    latency_max: u64 = 0,
     thread: std.Thread,
+    latencies: std.ArrayList(u64),
+    arena: std.heap.ArenaAllocator,
 
     fn getRunner(comptime Lock: type) type {
         return struct {
@@ -259,8 +297,7 @@ const Worker = struct {
                     lock.release();
 
                     const latency = acquire_end - acquire_begin;
-                    self.latency_sum += latency;
-                    self.latency_max = std.math.max(self.latency_max, latency);
+                    self.latencies.append(latency) catch {};
                 }
             }
         };
@@ -388,8 +425,8 @@ const Result = struct {
     min: ?f64 = null,
     max: ?f64 = null,
     sum: ?f64 = null,
-    @"avg. lat.": ?u64 = null,
-    @"tail lat.": ?u64 = null,
+    @"lat. <50%": ?u64 = null,
+    @"lat. <99%": ?u64 = null,
 
     const name_align = 18;
     const val_align = 8;
@@ -440,8 +477,8 @@ const Result = struct {
         }
 
         inline for ([_][]const u8 {
-            "avg. lat.",
-            "tail lat.",
+            "lat. <50%",
+            "lat. <99%",
         }) |field| {
             const valign = val_align + 1;
             if (@field(self, field)) |value| {
