@@ -169,34 +169,30 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
         sum += w.iters;
         min = std.math.min(min, w.iters);
         max = std.math.max(max, w.iters);
-        latency_sum += w.latency_sum / w.iters;
+        latency_sum += w.latency_sum;
         latency_max = std.math.max(latency_max, w.latency_max);
     }
 
-    const mean = sum / workers.len;
-    const stdev = blk: {
-        var stdev: u64 = 0;
-        for (workers) |w| {
-            const r = w.iters - mean;
-            stdev += r * r;
-        }
-        var s = @intToFloat(f64, stdev);
-        if (workers.len > 1) {
-            s /= @intToFloat(f64, workers.len - 1);
-            s = @sqrt(s);
-        }
-        break :blk s;
-    };
+    const mean = @intToFloat(f64, sum) / @intToFloat(f64, workers.len);
+    var stdev: f64 = 0;
+    for (workers) |w| {
+        const r = @intToFloat(f64, w.iters) - mean;
+        stdev += r * r;
+    }
+    if (workers.len > 1) {
+        stdev /= @intToFloat(f64, workers.len - 1);
+        stdev = @sqrt(stdev);
+    }
     
     return Result{
         .name = Lock.name,
-        .mean =@intToFloat(f64, mean),
+        .mean = mean,
         .stdev = stdev,
         .min = @intToFloat(f64, min),
         .max = @intToFloat(f64, max),
         .sum = @intToFloat(f64, sum),
         .@"tail lat." = latency_max,
-        .@"avg. lat." = latency_sum / workers.len,
+        .@"avg. lat." = latency_sum / sum,
     };
 }
 
