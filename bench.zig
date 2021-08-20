@@ -128,168 +128,148 @@ const BenchConfig = struct {
 };
 
 fn bench(comptime Lock: type, config: BenchConfig) !Result {
-    const Context = struct {
-        lock: Lock,
-        event: utils.Event align(512),
-        is_running: bool,
-        results: []Res align(512),
-        work_locked: WorkUnit,
-        work_unlocked: WorkUnit,
+    const workers = try config.allocator.alloc(Worker, config.num_threads);
+    defer config.allocator.free(workers);
 
-        const Res = struct {
-            iters: f64,
-            latency_avg: u64,
-            latency_max: u64,
-        };
-        
-        const Self = @This();
-        const RunInfo = struct {
-            context: *Self,
-            index: usize,
-        };
-
-        fn run(run_info: RunInfo) void {
-            const self = run_info.context;
-            const result = &self.results[run_info.index];
-
-            var latency_max: u64 = 0;
-            var latency_sum: u64 = 0;
-            var latency_len: u64 = 0;
-            var lock_operations: u64 = 0;
-            
-            defer result.* = Res{
-                .iters = @intToFloat(f64, lock_operations),
-                .latency_avg = latency_sum / latency_len,
-                .latency_max = latency_max,
-            };
-
-            var timer = std.time.Timer.start() catch @panic("no timers available");
-            var prng = @as(u64, @ptrToInt(self) ^ @ptrToInt(result));
-
-            const base_work_locked = self.work_locked;
-            const base_work_unlocked = self.work_unlocked;
-
-            var works_locked = base_work_locked.count(&prng);
-            var works_unlocked = base_work_unlocked.count(&prng);
-
-            self.event.wait();
-
-            while (@atomicLoad(bool, &self.is_running, .SeqCst)) {
-                const start = timer.read();
-                self.lock.acquire();
-                var latency = timer.read() - start;
-
-                WorkUnit.run(works_locked);
-                
-                self.lock.release();
-                WorkUnit.run(works_unlocked);
-
-                lock_operations += 1;
-                if (lock_operations % 32 == 0) {
-                    works_locked = base_work_locked.count(&prng);
-                    works_unlocked = base_work_unlocked.count(&prng);
-                }
-
-                if (latency == 0)
-                    latency = 1;
-                if (latency > latency_max)
-                    latency_max = latency;
-                latency_sum += latency;
-                latency_len += 1;
-            }
-        }
-    };
-
-    const results = try config.allocator.alloc(Context.Res, config.num_threads);
-    defer config.allocator.free(results);
-    
     {
-        const context = try config.allocator.create(Context);
-        defer config.allocator.destroy(context);
+        var lock: Lock = undefined;
+        lock.init();
+        defer lock.deinit();
 
-        context.is_running = true;
-        context.results = results;
-        context.work_locked = config.work_locked;
-        context.work_unlocked = config.work_unlocked;
-
-        context.lock.init();
-        defer context.lock.deinit();
-
-        context.event = .{};
-        // defer context.event.deinit();
-
-        const threads = try config.allocator.alloc(std.Thread, config.num_threads);
-        defer config.allocator.free(threads);
-
-        for (threads) |*thread, index| {
-            const info = Context.RunInfo{
-                .context = context,
-                .index = index,
-            };
-            thread.* = try std.Thread.spawn(.{}, Context.run, .{info});
+        var spawned: usize = 0;
+        var barrier = Barrier{};
+        defer {
+            barrier.stop();
+            for (workers[0..spawned]) |w| w.thread.join();
+        }
+        
+        const runFn = Worker.getRunner(Lock).run;
+        while (spawned < workers.len) : (spawned += 1) {
+            workers[spawned] = .{ .thread = undefined };
+            workers[spawned].thread = try std.Thread.spawn(.{}, runFn, .{
+                &workers[spawned],
+                &lock,
+                &barrier,
+                config.work_locked,
+                config.work_unlocked,
+            });
         }
 
-        context.event.notify();
+        barrier.start();
         std.time.sleep(config.measure.nanos);
+    }
 
-        @atomicStore(bool, &context.is_running, false, .SeqCst);
-        for (threads) |thread| {
-            thread.join();
+    var sum: u64 = 0;
+    var max: u64 = 0;
+    var min: u64 = std.math.maxInt(u64);
+    var latency_sum: u64 = 0;
+    var latency_max: u64 = 0;
+
+    for (workers) |w| {
+        sum += w.iters;
+        min = std.math.min(min, w.iters);
+        max = std.math.max(max, w.iters);
+        latency_sum += w.latency_sum / w.iters;
+        latency_max = std.math.max(latency_max, w.latency_max);
+    }
+
+    const mean = sum / workers.len;
+    const stdev = blk: {
+        var stdev: u64 = 0;
+        for (workers) |w| {
+            const r = w.iters - mean;
+            stdev += r * r;
         }
-    }
-
-    var sum: f64 = 0;
-    for (results) |result|
-        sum += result.iters;
-    const mean = sum / @intToFloat(f64, results.len);
-
-    var stdev: f64 = 0;
-    for (results) |result| {
-        const r = result.iters - mean;
-        stdev += r * r;
-    }
-    if (results.len > 1) {
-        stdev /= @intToFloat(f64, results.len - 1);
-        stdev = @sqrt(stdev);
-    }
-
-    const Sort = struct {
-        fn by(comptime field: []const u8) fn(void, Context.Res, Context.Res) bool {
-            return struct {
-                fn lessThan(_: void, a: Context.Res, b: Context.Res) bool {
-                    return @field(a, field) < @field(b, field);
-                }
-            }.lessThan;
+        var s = @intToFloat(f64, stdev);
+        if (workers.len > 1) {
+            s /= @intToFloat(f64, workers.len - 1);
+            s = @sqrt(s);
         }
-    }.by;
-
-    std.sort.sort(Context.Res, results, {}, comptime Sort("iters"));
-    const min = results[0].iters;
-    const max = results[results.len - 1].iters;
-
-    // std.sort.sort(Context.Res, results, {}, comptime Sort("latency_max"));
-    // const lmax = results[results.len - 1].latency_max;
-
-    var lat_avg_sum: u64 = 0;
-    var lat_max_sum: u64 = 0;
-    for (results) |result| {
-        lat_avg_sum += result.latency_avg;
-        lat_max_sum += result.latency_max;
-    }
-    const lavg = lat_avg_sum / @as(u64, results.len);
-    const lmax = lat_max_sum / @as(u64, results.len);
-
+        break :blk s;
+    };
+    
     return Result{
         .name = Lock.name,
-        .mean = mean,
+        .mean =@intToFloat(f64, mean),
         .stdev = stdev,
-        .min = min,
-        .max = max,
-        .sum = sum,
-        .@"tail lat." = lmax,
-        .@"avg. lat." = lavg,
+        .min = @intToFloat(f64, min),
+        .max = @intToFloat(f64, max),
+        .sum = @intToFloat(f64, sum),
+        .@"tail lat." = latency_max,
+        .@"avg. lat." = latency_sum / workers.len,
     };
 }
+
+const Barrier = struct {
+    state: std.atomic.Atomic(u32) = std.atomic.Atomic(u32).init(0),
+
+    fn wait(self: *const Barrier) void {
+        while (self.state.load(.Acquire) == 0) {
+            std.Thread.Futex.wait(&self.state, 0, null) catch unreachable;
+        }
+    }
+
+    fn isRunning(self: *const Barrier) bool {
+        return self.state.load(.Acquire) == 1;
+    }
+
+    fn wake(self: *Barrier, value: u32) void {
+        self.state.store(value, .Release);
+        std.Thread.Futex.wake(&self.state, std.math.maxInt(u32));
+    }
+
+    fn start(self: *Barrier) void {
+        self.wake(1);
+    }
+
+    fn stop(self: *Barrier) void {
+        self.wake(2);
+    }
+};
+
+const Worker = struct {
+    iters: u64 = 0,
+    latency_sum: u64 = 0,
+    latency_max: u64 = 0,
+    thread: std.Thread,
+
+    fn getRunner(comptime Lock: type) type {
+        return struct {
+            pub fn run(
+                noalias self: *Worker,
+                noalias lock: *Lock,
+                noalias barrier: *const Barrier,
+                work_locked: WorkUnit,
+                work_unlocked: WorkUnit,
+            ) void {
+                var prng = @as(u64, @ptrToInt(self) ^ @ptrToInt(lock));
+                var locked: u64 = 0;
+                var unlocked: u64 = 0;
+
+                barrier.wait();
+                while (barrier.isRunning()) : (self.iters += 1) {
+                    if (self.iters % 32 == 0) {
+                        locked = work_locked.count(&prng);
+                        unlocked = work_unlocked.count(&prng);
+                    }
+
+                    WorkUnit.run(locked);
+
+                    const acquire_begin = utils.nanotime();
+                    lock.acquire();
+                    const acquire_end = utils.nanotime();
+
+                    WorkUnit.run(unlocked);
+                    lock.release();
+
+                    const latency = acquire_end - acquire_begin;
+                    self.latency_sum += latency;
+                    self.latency_max = std.math.max(self.latency_max, latency);
+                }
+            }
+        };
+    }
+};
 
 const Parser = struct {
     fn parse(
@@ -489,37 +469,32 @@ const WorkUnit = struct {
     from: u64,
     to: ?u64,
 
-    fn nanosPerUnit() !u64 {
-        var timer = try std.time.Timer.start();
-        
-        var attempts: [10]u64 = undefined;
+    fn nanosPerUnit() !f64 {
+        var attempts: [10]f64 = undefined;
         for (attempts) |*attempt| {
-            const timer_start = timer.read();
-            _ = timer.read();
-            const timer_overhead = timer.read() - timer_start;
-
             const num_works = 10_000;
-            WorkUnit.run(num_works);
-            const work_start = timer.read();
-            WorkUnit.run(num_works);
-            const work_overhead = timer.read() - work_start;
+            const start = utils.nanotime();
 
-            const elapsed = work_overhead - timer_overhead;
-            const ns_per_work = elapsed / num_works;
-            attempt.* = std.math.max(1, ns_per_work); 
+            WorkUnit.run(num_works);
+            const elapsed = @intToFloat(f64, utils.nanotime() - start);
+            attempt.* = elapsed / @as(f64, num_works);
         }
 
-        var sum: u64 = 0;
+        var sum: f64 = 0;
         for (attempts) |attempt|
             sum += attempt;
-        return sum / attempts.len;
+        return sum / @intToFloat(f64, attempts.len);
     }
 
-    fn scaled(self: WorkUnit, div: u64) WorkUnit {
+    fn scaled(self: WorkUnit, ns_per_unit: f64) WorkUnit {
         return WorkUnit{
-            .from = self.from / div,
-            .to = if (self.to) |t| t / div else null,
+            .from = scale(self.from, ns_per_unit),
+            .to = if (self.to) |t| scale(t, ns_per_unit) else null,
         };
+    }
+
+    fn scale(value: u64, ns_per_unit: f64) u64 {
+        return @floatToInt(u64, @intToFloat(f64, value) / ns_per_unit);
     }
 
     fn count(self: WorkUnit, prng: *u64) u64 {
@@ -533,7 +508,7 @@ const WorkUnit = struct {
             prng.* = xs;
             break :blk xs;
         };
-        return (rng % (max - min + 1)) + min;
+        return std.math.max(1, (rng % (max - min + 1)) + min);
     }
 
     fn work() void {

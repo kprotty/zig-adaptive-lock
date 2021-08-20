@@ -95,7 +95,7 @@ pub fn nanotime() u64 {
         }
 
         if (now < delta) now = delta;
-        return ((delta - now) * std.time.ns_per_s) / frequency;
+        return ((now - delta) * std.time.ns_per_s) / freq;
     }
 
     if (is_darwin) {
@@ -114,7 +114,7 @@ pub fn nanotime() u64 {
             delta = Static.delta.compareAndSwap(0, now, .Monotonic, .Monotonic) orelse now;
         }
 
-        var current = delta - now;
+        var current = now - delta;
         if (info.numer != 1) current *= info.numer;
         if (info.denom != 1) current /= info.denom;
         return current;
