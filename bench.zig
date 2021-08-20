@@ -13,22 +13,23 @@
 // limitations under the License.
 
 const std = @import("std");
+const utils = @import("./utils.zig");
 
 const locks = .{
     // "spin",
-    "ticket",
-    "os",
-    "std",
+    @import("locks/ticket.zig").Lock,
+    @import("locks/os.zig").Lock,
+    //"std",
     // "futex",
     // "raw_futex",
     // "parking_lot",
-    "word_lock",
-    "word_lock_waking",
+    @import("locks/word_lock.zig").Lock,
+    //"word_lock_waking",
     // "webkit_wordlock",
 };
 
 fn help() void {
-    print("{}", .{
+    print("{s}", .{
         \\Usage: zig run bench.zig [measure] [threads] [locked] [unlocked]
         \\
         \\where:
@@ -89,7 +90,7 @@ pub fn main() !void {
         for (locked.items) |work_locked| {
             for (threads.items) |num_threads| {
                 for (measures.items) |measure| {
-                    print("measure={} threads={} locked={} unlocked={}\n{}\n", .{
+                    print("measure={} threads={} locked={} unlocked={}\n{s}\n", .{
                         measure,
                         num_threads,
                         work_locked,
@@ -100,8 +101,7 @@ pub fn main() !void {
                     const header_result = Result{};
                     print("{}\n", .{header_result});
 
-                    inline for (locks) |lock| {
-                        const Lock = @import("./locks/" ++ lock ++ ".zig").Lock;
+                    inline for (locks) |Lock| {
                         const result = try bench(Lock, BenchConfig{
                             .allocator = allocator,
                             .num_threads = num_threads,
@@ -130,7 +130,7 @@ const BenchConfig = struct {
 fn bench(comptime Lock: type, config: BenchConfig) !Result {
     const Context = struct {
         lock: Lock,
-        event: std.StaticResetEvent align(512),
+        event: utils.Event align(512),
         is_running: bool,
         results: []Res align(512),
         work_locked: WorkUnit,
@@ -165,16 +165,6 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
 
             var timer = std.time.Timer.start() catch @panic("no timers available");
             var prng = @as(u64, @ptrToInt(self) ^ @ptrToInt(result));
-            const timer_overhead = blk: {
-                var sum: u64 = 0;
-                const attempts = 10;
-                for ([_]u0{0} ** attempts) |_| {
-                    const start = timer.read();
-                    _ = timer.read();
-                    sum += timer.read() - start;
-                }
-                break :blk (sum / attempts);
-            };
 
             const base_work_locked = self.work_locked;
             const base_work_unlocked = self.work_unlocked;
@@ -228,25 +218,23 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
         context.event = .{};
         // defer context.event.deinit();
 
-        const threads = try config.allocator.alloc(*std.Thread, config.num_threads);
+        const threads = try config.allocator.alloc(std.Thread, config.num_threads);
         defer config.allocator.free(threads);
 
         for (threads) |*thread, index| {
-            thread.* = try std.Thread.spawn(
-                Context.RunInfo{
-                    .context = context,
-                    .index = index,
-                },
-                Context.run,
-            );
+            const info = Context.RunInfo{
+                .context = context,
+                .index = index,
+            };
+            thread.* = try std.Thread.spawn(.{}, Context.run, .{info});
         }
 
-        context.event.set();
+        context.event.notify();
         std.time.sleep(config.measure.nanos);
 
         @atomicStore(bool, &context.is_running, false, .SeqCst);
         for (threads) |thread| {
-            thread.wait();
+            thread.join();
         }
     }
 
@@ -445,6 +433,9 @@ const Result = struct {
         options: std.fmt.FormatOptions,
         writer: anytype,
     ) !void {
+        _ = fmt;
+        _ = options;
+        
         const name_fmt = "{s:<" ++ toStr(name_align) ++ "} |";
         const name: []const u8 = self.name orelse "name"[0..];
         try std.fmt.format(writer, name_fmt, .{name});
@@ -455,7 +446,7 @@ const Result = struct {
             "min",
             "max",
             "sum",
-        }) |field, index| {
+        }) |field| {
             const valign = val_align - 2;
             if (@field(self, field)) |value| {
                 if (value < 1_000) {
@@ -475,7 +466,7 @@ const Result = struct {
         inline for ([_][]const u8 {
             "avg. lat.",
             "tail lat.",
-        }) |field, index| {
+        }) |field| {
             const valign = val_align + 1;
             if (@field(self, field)) |value| {
                 if (value < 1_000) {
@@ -546,14 +537,7 @@ const WorkUnit = struct {
     }
 
     fn work() void {
-        switch (std.builtin.arch) {
-            .i386, .x86_64 => asm volatile("pause" ::: "memory"),
-            .arm, .aarch64 => asm volatile("yield" ::: "memory"),
-            else => {
-                var local: usize = undefined;
-                var load = @ptrCast(*volatile usize, &local).*;
-            },
-        }
+        std.atomic.spinLoopHint();
     }
 
     fn run(iterations: u64) void {
@@ -569,6 +553,8 @@ const WorkUnit = struct {
         options: std.fmt.FormatOptions,
         writer: anytype,
     ) !void {
+        _ = fmt;
+        _ = options;
         const from_duration = Duration{ .nanos = self.from };
         if (self.to) |to| {
             const to_duration = Duration{ .nanos = to };
@@ -588,6 +574,8 @@ const Duration = struct {
         options: std.fmt.FormatOptions,
         writer: anytype,
     ) !void {
+        _ = fmt;
+        _ = options;
         if (self.nanos < std.time.ns_per_us) {
             try std.fmt.format(writer, "{}ns", .{self.nanos});
         } else if (self.nanos < std.time.ns_per_ms) {
