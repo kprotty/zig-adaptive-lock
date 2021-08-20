@@ -13,11 +13,14 @@
 // limitations under the License.
 
 const std = @import("std");
+const utils = @import("../utils.zig");
+const Atomic = std.atomic.Atomic;
 
-pub const Lock = struct {
-    pub const name = "std.Mutex";
+pub const Lock = extern struct {
+    pub const name = "ticket_lock";
 
-    inner: std.Mutex = std.Mutex{},
+    ticket: Atomic(u16) = Atomic(u16).init(0),
+    owner: Atomic(u16) = Atomic(u16).init(0),
 
     pub fn init(self: *Lock) void {
         self.* = Lock{};
@@ -28,12 +31,18 @@ pub const Lock = struct {
     }
 
     pub fn acquire(self: *Lock) void {
-        const held = self.inner.acquire();
-        _ = held;
+        var spin = utils.SpinWait{};
+        const ticket = self.ticket.fetchAdd(1, .Monotonic);
+
+        while (self.owner.load(.Acquire) != ticket) {
+            if (!spin.yield()) {
+                utils.yieldThread(1);
+            }
+        }
     }
 
     pub fn release(self: *Lock) void {
-        const held = std.Mutex.Held{ .mutex = &self.inner };
-        held.release();
+        const new_owner = self.owner.loadUnchecked() +% 1;
+        self.owner.store(new_owner, .Release);
     }
 };

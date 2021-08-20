@@ -17,7 +17,7 @@ const utils = @import("../utils.zig");
 const Atomic = std.atomic.Atomic;
 
 pub const Lock = extern struct {
-    pub const name = "word_lock";
+    pub const name = "word_lock_waking";
 
     state: Atomic(usize) = Atomic(usize).init(UNLOCKED),
 
@@ -42,14 +42,22 @@ pub const Lock = extern struct {
     }
 
     pub fn acquire(self: *Lock) void {
-        if (self.state.tryCompareAndSwap(
+        if (!self.acquireFast()) {
+            self.acquireSlow();
+        }
+    }
+
+    inline fn acquireFast(self: *Lock) bool {
+        if (utils.is_x86) {
+            return self.state.bitSet(@ctz(usize, LOCKED), .Acquire) == 0;
+        }
+
+        return self.state.tryCompareAndSwap(
             UNLOCKED,
             LOCKED,
             .Acquire,
             .Monotonic,
-        )) |_| {
-            self.acquireSlow();
-        }
+        ) == null;
     }
 
     fn acquireSlow(self: *Lock) void {
@@ -95,7 +103,7 @@ pub const Lock = extern struct {
 
             waiter.event.wait();
             spin.reset();
-            state = self.state.load(.Monotonic);
+            state = self.state.fetchSub(WAKING, .Monotonic) - WAKING;
         }
     }
 
@@ -149,7 +157,7 @@ pub const Lock = extern struct {
 
             if (tail.prev) |new_tail| {
                 head.tail = new_tail;
-                _ = self.state.fetchAnd(~@as(usize, WAKING), .Release);
+                std.atomic.fence(.Release);
             } else {
                 while (true) {
                     state = self.state.tryCompareAndSwap(

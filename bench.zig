@@ -16,16 +16,18 @@ const std = @import("std");
 const utils = @import("./utils.zig");
 
 const locks = .{
-    // "spin",
-    @import("locks/ticket.zig").Lock,
-    @import("locks/os.zig").Lock,
-    //"std",
-    // "futex",
-    // "raw_futex",
-    // "parking_lot",
+    // ------------ Spin Locks ---------------
+    //@import("locks/ticket_lock.zig").Lock,
+
+    // ------------ System Locks ---------------
+    @import("locks/os_lock.zig").Lock,
+    @import("locks/os_raw_lock.zig").Lock,
+    if (utils.is_windows) @import("locks/keyed_event_lock.zig").Lock else void,
+
+    // ------------ Custom Locks ---------------
+    @import("locks/futex_lock.zig").Lock,
     @import("locks/word_lock.zig").Lock,
-    //"word_lock_waking",
-    // "webkit_wordlock",
+    //@import("locks/word_lock_waking.zig").Lock,
 };
 
 fn help() void {
@@ -117,15 +119,17 @@ pub fn main() !void {
                     print("{}\n", .{header_result});
 
                     inline for (locks) |Lock| {
-                        const result = try bench(Lock, BenchConfig{
-                            .allocator = allocator,
-                            .shared_allocator = shared_allocator,
-                            .num_threads = num_threads,
-                            .measure = measure,
-                            .work_locked = work_locked.scaled(nanos_per_work_unit),
-                            .work_unlocked = work_unlocked.scaled(nanos_per_work_unit),
-                        });
-                        print("{}\n", .{result});
+                        if (Lock != void) {
+                            const result = try bench(Lock, BenchConfig{
+                                .allocator = allocator,
+                                .shared_allocator = shared_allocator,
+                                .num_threads = num_threads,
+                                .measure = measure,
+                                .work_locked = work_locked.scaled(nanos_per_work_unit),
+                                .work_unlocked = work_unlocked.scaled(nanos_per_work_unit),
+                            });
+                            print("{}\n", .{result});
+                        }
                     }
 
                     print("\n", .{});
