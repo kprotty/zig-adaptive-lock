@@ -23,8 +23,8 @@ pub const Lock = extern struct {
 
     const UNLOCKED = 0;
     const LOCKED = 1 << 0;
-    const WAKING = 1 << 1;
-    const WAITING = 1 << 2;
+    const WAKING = 1 << 8;
+    const WAITING = 1 << 9;
 
     pub fn init(self: *Lock) void {
         self.* = Lock{};
@@ -35,16 +35,9 @@ pub const Lock = extern struct {
     }
 
     pub fn acquire(self: *Lock) void {
-        if (!self.acquireFast()) {
+        if (self.state.bitSet(@ctz(u32, LOCKED), .Acquire) != UNLOCKED) {
             self.acquireSlow();
         }
-    }
-
-    inline fn acquireFast(self: *Lock) bool {
-        return self.state.bitSet(
-            @ctz(u32, LOCKED),
-            .Acquire,
-        ) == UNLOCKED;
     }
 
     fn acquireSlow(self: *Lock) void {
@@ -54,12 +47,16 @@ pub const Lock = extern struct {
         var state = self.state.load(.Monotonic);
         while (true) {
             if (state & LOCKED == 0) {
-                state = self.state.tryCompareAndSwap(
-                    state,
-                    state | LOCKED,
-                    .Acquire,
-                    .Monotonic,
-                ) orelse return;
+                if (@ptrCast(*Atomic(u8), &self.state).swap(LOCKED, .Acquire) == UNLOCKED) return;
+                //if (self.state.bitSet(@ctz(u32, LOCKED), .Acquire) == UNLOCKED) return;
+                std.atomic.spinLoopHint();
+                state = self.state.load(.Monotonic);
+                // state = self.state.tryCompareAndSwap(
+                //     state,
+                //     state | LOCKED,
+                //     .Acquire,
+                //     .Monotonic,
+                // ) orelse return;
                 continue;
             }
 
@@ -70,7 +67,7 @@ pub const Lock = extern struct {
                 continue;
             }
 
-            state = self.state.compareAndSwap(
+            state = self.state.tryCompareAndSwap(
                 state,
                 state + WAITING,
                 .Monotonic,
@@ -84,8 +81,19 @@ pub const Lock = extern struct {
     }
 
     pub fn release(self: *Lock) void {
-        const state = self.state.fetchSub(LOCKED, .Release);
-        if ((state >= WAITING) and (state & WAKING == 0)) {
+        //@ptrCast(*Atomic(u8), &self.state).store(UNLOCKED, .SeqCst);
+        //const state = self.state.load(.Monotonic);
+
+        const state = asm volatile(
+            \\ movb $0, %[ptr]
+            \\ lock addl $0, %%gs:0
+            \\ movl %[ptr], %[state]
+            : [state] "=r" (-> u32)
+            : [ptr] "*m" (@ptrCast(*Atomic(u8), &self.state))
+            : "cc", "memory"
+        );
+
+        if ((state >= WAITING) and (state & (LOCKED | WAKING) == 0)) {
             self.releaseSlow();
         }
     }

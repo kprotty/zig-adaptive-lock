@@ -47,23 +47,23 @@ const DarwinLock = extern struct {
 };
 
 const WindowsLock = extern struct {
-    pub const name = "CRITICAL_SECTION";
+    pub const name = "SRWLOCK";
 
-    cs: std.os.windows.CRITICAL_SECTION,
+    srwlock: std.os.windows.SRWLOCK = std.os.windows.SRWLOCK_INIT,
 
     pub fn init(self: *Lock) void {
-        std.os.windows.kernel32.InitializeCriticalSection(&self.cs);
+        self.* = Lock{};
     }
 
     pub fn deinit(self: *Lock) void {
-        std.os.windows.kernel32.DeleteCriticalSection(&self.cs);
+        self.* = undefined;
     }
 
     pub fn acquire(self: *Lock) void {
-        std.os.windows.kernel32.EnterCriticalSection(&self.cs);
+        std.os.windows.kernel32.AcquireSRWLockExclusive(&self.srwlock);
     }
 
     pub fn release(self: *Lock) void {
-        std.os.windows.kernel32.LeaveCriticalSection(&self.cs);
+        std.os.windows.kernel32.ReleaseSRWLockExclusive(&self.srwlock);
     }
 };

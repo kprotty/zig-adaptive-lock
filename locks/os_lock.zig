@@ -20,30 +20,28 @@ pub const Lock =
         WindowsLock
     else if (utils.is_posix)
         PosixLock
-    else if (utils.is_linux)
-        LinuxLock
     else
-        @compileError("OS does not provide a default lock");
+        void;
 
 const WindowsLock = extern struct {
-    pub const name = "SRWLOCK";
+    pub const name = "CRITICAL_SECTION";
 
-    srwlock: std.os.windows.SRWLOCK = std.os.windows.SRWLOCK_INIT,
+    cs: std.os.windows.CRITICAL_SECTION,
 
     pub fn init(self: *Lock) void {
-        self.* = Lock{};
+        std.os.windows.kernel32.InitializeCriticalSection(&self.cs);
     }
 
     pub fn deinit(self: *Lock) void {
-        self.* = undefined;
+        std.os.windows.kernel32.DeleteCriticalSection(&self.cs);
     }
 
     pub fn acquire(self: *Lock) void {
-        std.os.windows.kernel32.AcquireSRWLockExclusive(&self.srwlock);
+        std.os.windows.kernel32.EnterCriticalSection(&self.cs);
     }
 
     pub fn release(self: *Lock) void {
-        std.os.windows.kernel32.ReleaseSRWLockExclusive(&self.srwlock);
+        std.os.windows.kernel32.LeaveCriticalSection(&self.cs);
     }
 };
 
@@ -66,38 +64,5 @@ const PosixLock = extern struct {
 
     pub fn release(self: *Lock) void {
         std.debug.assert(std.c.pthread_mutex_unlock(&self.mutex) == 0);
-    }
-};
-
-const LinuxLock = extern struct {
-    pub const name = "futex";
-
-    state: Atomic(u32) = Atomic(u32).init(0),
-
-    const Atomic = std.atomic.Atomic;
-    const Futex = std.Thread.Futex;
-
-    pub fn init(self: *Lock) void {
-        self.* = .{};
-    }
-
-    pub fn deinit(self: *Lock) void {
-        self.* = undefined;
-    }
-
-    pub fn acquire(self: *Lock) void {
-        if (self.state.tryCompareAndSwap(0, 1, .Acquire, .Monotonic) == null) {
-            return;
-        }
-
-        while (self.state.swap(2, .Acquire) != 0) {
-            Futex.wait(&self.state, 2, null) catch unreachable;
-        }
-    }
-
-    pub fn release(self: *Lock) void {
-        if (self.state.swap(0, .Release) == 2) {
-            Futex.wake(&self.state, 1);
-        }
     }
 };
