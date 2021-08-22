@@ -126,19 +126,18 @@ pub fn nanotime() u64 {
 }
 
 pub const SpinWait = struct {
-    counter: usize = 0,
+    counter: usize = 10,
 
     pub fn reset(self: *SpinWait) void {
         self.* = .{};
     }
 
     pub fn yield(self: *SpinWait) bool {
-        if (self.counter > 10) return false;
-
-        if (self.counter <= 3) {
-            yieldCpu(@as(usize, 1) << @intCast(u4, self.counter));
-        } else {
-            yieldThread(1);
+        if (self.counter == 0) return false;
+        self.counter -= 1;
+        switch (self.counter) {
+            0 => yieldThread(1),
+            else => yieldCpu(1),
         }
         return true;
     }
