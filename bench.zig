@@ -18,6 +18,7 @@ const utils = @import("./utils.zig");
 const locks = .{
     // ------------ Spin Locks ---------------
     //@import("locks/ticket_lock.zig").Lock,
+    @import("locks/mcs_lock.zig").Lock,
 
     // ------------ System Locks ---------------
     @import("locks/os_lock.zig").Lock,
@@ -27,7 +28,6 @@ const locks = .{
     // ------------ Custom Locks ---------------
     @import("locks/futex_lock.zig").Lock,
     @import("locks/word_lock.zig").Lock,
-    //@import("locks/word_lock_waking.zig").Lock,
 };
 
 fn help() void {
@@ -64,7 +64,7 @@ pub fn main() !void {
     // allocator which can be shared between threads
     const shared_allocator = blk: {
         if (std.builtin.link_libc) {
-            break :blk &std.heap.c_allocator;
+            break :blk std.heap.c_allocator;
         }
 
         if (utils.is_windows) {
