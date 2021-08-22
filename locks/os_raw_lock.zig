@@ -21,6 +21,8 @@ pub const Lock =
         WindowsLock
     else if (utils.is_darwin)
         DarwinLock
+    else if (utils.is_linux)
+        LinuxLock
     else
         void;
 
@@ -65,5 +67,124 @@ const WindowsLock = extern struct {
 
     pub fn release(self: *Lock) void {
         std.os.windows.kernel32.ReleaseSRWLockExclusive(&self.srwlock);
+    }
+};
+
+const LinuxLock = extern struct {
+    pub const name = "FUTEX_LOCK_PI";
+
+    state: Atomic(u32) = Atomic(u32).init(UNLOCKED),
+
+    const UNLOCKED = 0;
+    const FUTEX_WAITERS = 0x80000000;
+
+    pub fn init(self: *Lock) void {
+        self.* = Lock{};
+    }
+
+    pub fn deinit(self: *Lock) void {
+        self.* = undefined;
+    }
+
+    threadlocal var tls_tid: u32 = 0;
+
+    pub fn acquire(self: *Lock) void {
+        if (!self.acquireFast()) {
+            self.acquireSlow();
+        }
+    }
+
+    inline fn acquireFast(self: *Lock) bool  {
+        const tid = tls_tid;
+        return tid != 0 and self.state.tryCompareAndSwap(
+            UNLOCKED,
+            tid,
+            .Acquire,
+            .Monotonic,
+        ) == null;
+    }
+
+    fn acquireSlow(self: *Lock) void {
+        @setCold(true);
+
+        var tid = tls_tid;
+        if (tid == 0) {
+            tid = @bitCast(u32, std.os.linux.gettid());
+            tls_tid = tid;
+        }
+
+        var spin: u8 = 10;
+        while (spin > 0) : (spin -= 1) {
+            const state = self.state.load(.Monotonic);
+            if (state & FUTEX_WAITERS != 0) break;
+            if (state != UNLOCKED) continue;
+            if (self.state.tryCompareAndSwap(UNLOCKED, tid, .Acquire, .Monotonic) == null) return;
+        }
+
+        while (true) {
+            if (self.state.load(.Monotonic) == 0) {
+                _ = self.state.compareAndSwap(
+                    UNLOCKED,
+                    tid,
+                    .Acquire,
+                    .Monotonic,
+                ) orelse return;
+            }
+
+            const rc = std.os.linux.syscall4(
+                .futex,
+                @ptrToInt(&self.state),
+                std.os.linux.FUTEX_PRIVATE_FLAG | std.os.linux.FUTEX_LOCK_PI,
+                undefined,
+                @as(usize, 0),
+            );
+
+            switch (std.os.linux.getErrno(rc)) {
+                0 => return,
+                std.os.EAGAIN => continue,
+                std.os.ENOSYS => unreachable,
+                std.os.EDEADLK => unreachable,
+                std.os.EFAULT => unreachable,
+                std.os.EINVAL => unreachable,
+                std.os.EPERM => unreachable,
+                std.os.ENOMEM => @panic("kernel OOM"),
+                else => unreachable,
+            }
+        }
+    }
+
+    pub fn release(self: *Lock) void {
+        const tid = tls_tid;
+        std.debug.assert(tid != 0);
+
+        _ = self.state.compareAndSwap(
+            tid,
+            UNLOCKED,
+            .Release,
+            .Monotonic,
+        ) orelse return;
+
+        return self.releaseSlow();
+    }
+
+    fn releaseSlow(self: *Lock) void {
+        @setCold(true);
+
+        while (true) {
+            const rc = std.os.linux.syscall4(
+                .futex,
+                @ptrToInt(&self.state),
+                std.os.linux.FUTEX_PRIVATE_FLAG | std.os.linux.FUTEX_UNLOCK_PI,
+                undefined,
+                @as(usize, 0),
+            );
+
+            switch (std.os.linux.getErrno(rc)) {
+                0 => return,
+                std.os.EINVAL => unreachable,
+                std.os.EPERM => unreachable,
+                else => unreachable,
+            }
+        }
     }
 };

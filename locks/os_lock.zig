@@ -51,11 +51,11 @@ const PosixLock = extern struct {
     mutex: std.c.pthread_mutex_t,
 
     pub fn init(self: *Lock) void {
-        std.debug.assert(std.c.pthread_mutex_init(&self.mutex, null) == 0);
+        self.mutex = .{};
     }
 
     pub fn deinit(self: *Lock) void {
-        std.debug.assert(std.c.pthread_mutex_destroy(&self.mutex) == 0);
+        _ = std.c.pthread_mutex_destroy(&self.mutex);
     }
 
     pub fn acquire(self: *Lock) void {
