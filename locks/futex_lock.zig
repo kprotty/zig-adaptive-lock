@@ -35,62 +35,42 @@ pub const Lock = extern struct {
     }
 
     pub fn acquire(self: *Lock) void {
-        if (!self.acquireFast()) {
-            self.acquireSlow();
-        }
+        if (self.acquireFast()) return;
+        return self.acquireSlow();
     }
 
     inline fn acquireFast(self: *Lock) bool {
-        if (utils.is_x86) {
-            return self.state.bitSet(@ctz(u32, LOCKED), .Acquire) == UNLOCKED;
-        }
+        // if (utils.is_x86) {
+        //     return self.state.bitSet(@ctz(u32, LOCKED), .Acquire) == UNLOCKED;
+        // }
 
-        return self.state.tryCompareAndSwap(
-            UNLOCKED,
-            LOCKED,
-            .Acquire,
-            .Monotonic,
-        ) == null;
+        return self.state.tryCompareAndSwap(UNLOCKED, LOCKED, .Acquire, .Monotonic) == null;
     }
 
     fn acquireSlow(self: *Lock) void {
         @setCold(true);
 
-        var spin: u8 = 10;
-        while (spin > 0) : (spin -= 1) {
-            std.atomic.spinLoopHint();
-
+        var spin = utils.SpinWait{};
+        while (spin.yield()) {
             switch (self.state.load(.Monotonic)) {
-                UNLOCKED => _ = self.state.compareAndSwap(
-                    UNLOCKED,
-                    LOCKED,
-                    .Acquire,
-                    .Monotonic,
-                ) orelse return,
-                LOCKED => continue,
-                CONTENDED => break,
+                0 => if (self.acquireFast()) return,
+                1 => continue,
+                2 => break,
                 else => unreachable,
             }
         }
 
         while (true) : (Futex.wait(&self.state, CONTENDED, null) catch unreachable) {
+            // if (utils.is_x86) {
+            //     if (self.state.swap(CONTENDED, .Acquire) == 0) return;
+            //     continue;
+            // }
+
             var state = self.state.load(.Monotonic);
-            if (state == CONTENDED) {
-                continue;
-            }
-
-            if (utils.is_x86) {
-                switch (self.state.swap(CONTENDED, .Acquire)) {
-                    UNLOCKED => return,
-                    LOCKED, CONTENDED => continue,
-                    else => unreachable,
-                }
-            }
-
             while (state != CONTENDED) {
                 state = switch (state) {
-                    UNLOCKED => self.state.tryCompareAndSwap(state, CONTENDED, .Acquire, .Monotonic) orelse return,
-                    LOCKED => self.state.tryCompareAndSwap(state, CONTENDED, .Acquire, .Monotonic) orelse break,
+                    0 => self.state.tryCompareAndSwap(state, CONTENDED, .Acquire, .Monotonic) orelse return,
+                    1 => self.state.tryCompareAndSwap(state, CONTENDED, .Monotonic, .Monotonic) orelse break,
                     else => unreachable,
                 };
             }
@@ -98,12 +78,8 @@ pub const Lock = extern struct {
     }
 
     pub fn release(self: *Lock) void {
-        switch (self.state.swap(UNLOCKED, .Release)) {
-            UNLOCKED => unreachable,
-            LOCKED => {},
-            CONTENDED => self.releaseSlow(),
-            else => unreachable,
-        }
+        if (self.state.swap(UNLOCKED, .Release) != CONTENDED) return;
+        return self.releaseSlow();
     }
     
     fn releaseSlow(self: *Lock) void {
