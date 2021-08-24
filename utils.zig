@@ -18,7 +18,8 @@ const arch = target.cpu.arch;
 const os_tag = target.os.tag;
 
 const Atomic = std.atomic.Atomic;
-const Futex = std.Thread.Futex;
+
+pub const Futex = std.Thread.Futex;
 
 pub const is_x86 = switch (arch) {
     .i386, .x86_64 => true,
@@ -126,18 +127,19 @@ pub fn nanotime() u64 {
 }
 
 pub const SpinWait = struct {
-    counter: usize = 10,
+    counter: usize = 0,
 
     pub fn reset(self: *SpinWait) void {
         self.* = .{};
     }
 
     pub fn yield(self: *SpinWait) bool {
-        if (self.counter == 0) return false;
-        self.counter -= 1;
-        switch (self.counter) {
-            0 => yieldThread(1),
-            else => yieldCpu(1),
+        if (self.counter >= 10) return false;
+        self.counter += 1;
+        if (self.counter <= 3) {
+            yieldCpu(@as(usize, 1) << @intCast(u3, self.counter));
+        } else {
+            yieldThread(1);
         }
         return true;
     }

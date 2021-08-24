@@ -28,6 +28,7 @@ const locks = .{
     // ------------ Custom Locks ---------------
     @import("locks/futex_lock.zig").Lock,
     @import("locks/word_lock.zig").Lock,
+    @import("locks/parking_lot.zig").Lock,
 };
 
 fn help() void {
