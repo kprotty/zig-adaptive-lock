@@ -134,14 +134,22 @@ pub const SpinWait = struct {
     }
 
     pub fn yield(self: *SpinWait) bool {
-        if (self.counter >= 10) return false;
+        if (self.counter >= 100) return false;
         self.counter += 1;
-        if (self.counter <= 3) {
-            yieldCpu(@as(usize, 1) << @intCast(u3, self.counter));
-        } else {
-            yieldThread(1);
-        }
+        yieldCpu(1);
+        // switch (self.counter % 10) {
+        //     0 => yieldThread(1),
+        //     else => yieldCpu(1),
+        // }
         return true;
+        // if (self.counter >= 10) return false;
+        // self.counter += 1;
+        // if (self.counter <= 3) {
+        //     yieldCpu(@as(usize, 1) << @intCast(u3, self.counter));
+        // } else {
+        //     yieldThread(1);
+        // }
+        // return true;
     }
 };
 

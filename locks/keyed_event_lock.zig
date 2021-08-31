@@ -73,7 +73,7 @@ pub const Lock = extern struct {
                 .Monotonic,
                 .Monotonic,
             ) orelse blk: {
-                self.callKeyedEvent("NtWaitForKeyedEvent");
+                NtKeyedEvent.call(&self.state, "NtWaitForKeyedEvent");
                 state = self.state.fetchSub(WAKING, .Monotonic);
                 break :blk state - WAKING;
             };
@@ -109,38 +109,37 @@ pub const Lock = extern struct {
                 .Monotonic,
                 .Monotonic,
             ) orelse {
-                self.callKeyedEvent("NtReleaseKeyedEvent");
+                NtKeyedEvent.call(&self.state, "NtReleaseKeyedEvent");
                 return;
             };
         }
     }
+};
 
-    var event_handle = Atomic(usize).init(std.math.maxInt(usize));
+pub const NtKeyedEvent = struct {
+    var event_handle = Atomic(?std.os.windows.HANDLE).init(null);
 
-    fn callKeyedEvent(self: *Lock, comptime event_fn: []const u8) void {
+    pub fn call(ptr: *const Atomic(u32), comptime event_fn: []const u8) void {
         @setCold(true);
 
-        var handle = event_handle.load(.Monotonic);
-        if (handle == std.math.maxInt(usize)) {
-            const handle_ptr = @ptrCast(*std.os.windows.HANDLE, &handle);
+        const handle = event_handle.load(.Unordered) orelse blk: {
+            var handle: std.os.windows.HANDLE = undefined;
             const access_mask = std.os.windows.GENERIC_READ | std.os.windows.GENERIC_WRITE;
-            const status = std.os.windows.ntdll.NtCreateKeyedEvent(handle_ptr, access_mask, null, 0);
+            const status = std.os.windows.ntdll.NtCreateKeyedEvent(&handle, access_mask, null, 0);
 
-            if (status != .SUCCESS) handle = 0;
-            if (event_handle.compareAndSwap(
-                std.math.maxInt(usize),
-                handle,
-                .Monotonic,
-                .Monotonic,
-            )) |current_handle| {
-                if (status == .SUCCESS) std.os.windows.CloseHandle(handle_ptr.*);
-                handle = current_handle;
+            if (status != .SUCCESS) handle = std.os.windows.INVALID_HANDLE_VALUE;
+            if (event_handle.compareAndSwap(null, handle, .Monotonic, .Monotonic)) |current| {
+                if (status != .SUCCESS) std.os.windows.CloseHandle(handle);
+                handle = current orelse unreachable;
             }
-        }
+
+            if (handle == std.os.windows.INVALID_HANDLE_VALUE) break :blk null;
+            break :blk handle;
+        };
 
         switch (@field(std.os.windows.ntdll, event_fn)(
-            @intToPtr(?std.os.windows.HANDLE, handle),
-            @ptrCast(*const c_void, &self.state),
+            handle,
+            @ptrCast(*const c_void, ptr),
             std.os.windows.FALSE, // alertable
             null, // timeout
         )) {

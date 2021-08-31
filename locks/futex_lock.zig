@@ -40,14 +40,14 @@ pub const Lock = extern struct {
     }
 
     inline fn acquireFast(self: *Lock) bool {
-        // if (utils.is_x86) {
-        //     return self.state.bitSet(@ctz(u32, LOCKED), .Acquire) == UNLOCKED;
-        // }
+        if (utils.is_x86) {
+            return self.state.bitSet(@ctz(u32, LOCKED), .Acquire) == UNLOCKED;
+        }
 
         return self.state.tryCompareAndSwap(UNLOCKED, LOCKED, .Acquire, .Monotonic) == null;
     }
 
-    fn acquireSlow(self: *Lock) void {
+    noinline fn acquireSlow(self: *Lock) void {
         @setCold(true);
 
         var spin = utils.SpinWait{};
@@ -61,10 +61,10 @@ pub const Lock = extern struct {
         }
 
         while (true) : (Futex.wait(&self.state, CONTENDED, null) catch unreachable) {
-            // if (utils.is_x86) {
-            //     if (self.state.swap(CONTENDED, .Acquire) == 0) return;
-            //     continue;
-            // }
+            if (utils.is_x86) {
+                if (self.state.swap(CONTENDED, .Acquire) == 0) return;
+                continue;
+            }
 
             var state = self.state.load(.Monotonic);
             while (state != CONTENDED) {
@@ -82,7 +82,7 @@ pub const Lock = extern struct {
         return self.releaseSlow();
     }
     
-    fn releaseSlow(self: *Lock) void {
+    noinline fn releaseSlow(self: *Lock) void {
         @setCold(true);
 
         Futex.wake(&self.state, 1);
