@@ -71,7 +71,7 @@ const WindowsLock = extern struct {
 };
 
 const LinuxLock = extern struct {
-    pub const name = "FUTEX_LOCK_PI";
+    pub const name = "FUTEX.LOCK_PI";
 
     state: Atomic(u32) = Atomic(u32).init(UNLOCKED),
 
@@ -134,20 +134,20 @@ const LinuxLock = extern struct {
             const rc = std.os.linux.syscall4(
                 .futex,
                 @ptrToInt(&self.state),
-                std.os.linux.FUTEX_PRIVATE_FLAG | std.os.linux.FUTEX_LOCK_PI,
+                std.os.linux.FUTEX.PRIVATE_FLAG | std.os.linux.FUTEX.LOCK_PI,
                 undefined,
                 @as(usize, 0),
             );
 
             switch (std.os.linux.getErrno(rc)) {
-                0 => return,
-                std.os.EAGAIN => continue,
-                std.os.ENOSYS => unreachable,
-                std.os.EDEADLK => unreachable,
-                std.os.EFAULT => unreachable,
-                std.os.EINVAL => unreachable,
-                std.os.EPERM => unreachable,
-                std.os.ENOMEM => @panic("kernel OOM"),
+                .SUCCESS => return,
+                .AGAIN => continue,
+                .NOSYS => unreachable,
+                .DEADLK => unreachable,
+                .FAULT => unreachable,
+                .INVAL => unreachable,
+                .PERM => unreachable,
+                .NOMEM => @panic("kernel OOM"),
                 else => unreachable,
             }
         }
@@ -174,15 +174,15 @@ const LinuxLock = extern struct {
             const rc = std.os.linux.syscall4(
                 .futex,
                 @ptrToInt(&self.state),
-                std.os.linux.FUTEX_PRIVATE_FLAG | std.os.linux.FUTEX_UNLOCK_PI,
+                std.os.linux.FUTEX.PRIVATE_FLAG | std.os.linux.FUTEX.UNLOCK_PI,
                 undefined,
                 @as(usize, 0),
             );
 
             switch (std.os.linux.getErrno(rc)) {
-                0 => return,
-                std.os.EINVAL => unreachable,
-                std.os.EPERM => unreachable,
+                .SUCCESS => return,
+                .INVAL => unreachable,
+                .PERM => unreachable,
                 else => unreachable,
             }
         }
