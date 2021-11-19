@@ -232,7 +232,7 @@ pub mod generic {
         sync::atomic::{AtomicI32, Ordering},
     };
 
-    type InnerLock = super::super::word_lock_waking::Lock;
+    type InnerLock = super::super::os_lock::Lock;
 
     struct Waiter {
         next: Cell<Option<NonNull<Self>>>,

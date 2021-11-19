@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#![allow(deprecated)]
+
 use std::{
     convert::TryInto,
     fmt,
@@ -26,28 +28,29 @@ use std::{
 mod util;
 
 mod futex_lock;
-mod keyed_lock;
+// mod keyed_lock;
 mod os_lock;
 mod parking_lot_lock;
-mod plot_lock;
-mod simple_mutex_lock;
-mod spin_lock;
-mod sym_lock;
+// mod plot_lock;
+// mod simple_mutex_lock;
+// mod spin_lock;
+// mod sym_lock;
 mod word_lock;
-mod word_lock_fair;
-mod word_lock_waking;
-mod flume_lock;
-mod safe_parker;
+// mod word_lock_fair;
+// mod word_lock_waking;
+// mod flume_lock;
+// mod safe_parker;
 mod std_lock;
+mod usync_lock;
 
 fn bench_all(b: &mut Benchmarker) {
     // b.bench::<spin_lock::Lock>();
-    b.bench::<flume_lock::Lock>();
+    // b.bench::<flume_lock::Lock>();
 
     // b.bench::<sym_lock::Lock>();
-    b.bench::<os_lock::Lock>();
     b.bench::<std_lock::Lock>();
-    b.bench::<safe_parker::Lock>();
+    b.bench::<os_lock::Lock>();
+    b.bench::<usync_lock::Lock>();
     b.bench::<parking_lot_lock::Lock>();
     // b.bench::<simple_mutex_lock::Lock>();
     // b.bench::<plot_lock::Lock>();
