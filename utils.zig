@@ -13,9 +13,10 @@
 // limitations under the License.
 
 const std = @import("std");
-const target = std.Target.current;
+const target = @import("builtin").target;
 const arch = target.cpu.arch;
 const os_tag = target.os.tag;
+const builtin = @import("builtin");
 
 const Atomic = std.atomic.Atomic;
 
@@ -38,7 +39,7 @@ pub const is_darwin = switch (os_tag) {
     else => false,
 };
 
-pub const is_posix = std.builtin.link_libc and (switch (os_tag) {
+pub const is_posix = builtin.link_libc and (switch (os_tag) {
     .linux,
     .minix,
     .macos,
@@ -116,13 +117,13 @@ pub fn nanotime() u64 {
         }
 
         var current = now - delta;
-        if (info.numer != 1) current *= info.numer;
-        if (info.denom != 1) current /= info.denom;
+        if (Static.info.numer != 1) current *= Static.info.numer;
+        if (Static.info.denom != 1) current /= Static.info.denom;
         return current;
     }
 
     var ts: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK_MONOTONIC, &ts) catch unreachable;
+    std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &ts) catch unreachable;
     return @intCast(u64, ts.tv_sec) * std.time.ns_per_s + @intCast(u64, ts.tv_nsec);
 }
 

@@ -56,7 +56,7 @@ pub const Lock = extern struct {
                 0 => if (self.acquireFast()) return,
                 1 => continue,
                 2 => break,
-                else => unreachable,
+                else => continue,
             }
         }
 

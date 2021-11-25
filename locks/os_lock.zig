@@ -59,10 +59,10 @@ const PosixLock = extern struct {
     }
 
     pub fn acquire(self: *Lock) void {
-        std.debug.assert(std.c.pthread_mutex_lock(&self.mutex) == 0);
+        std.debug.assert(std.c.pthread_mutex_lock(&self.mutex) == std.os.errno(0));
     }
 
     pub fn release(self: *Lock) void {
-        std.debug.assert(std.c.pthread_mutex_unlock(&self.mutex) == 0);
+        std.debug.assert(std.c.pthread_mutex_unlock(&self.mutex) == std.os.errno(0));
     }
 };

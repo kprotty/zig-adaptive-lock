@@ -14,6 +14,7 @@
 
 const std = @import("std");
 const utils = @import("./utils.zig");
+const builtin = @import("builtin");
 
 const locks = .{
     // ------------ Spin Locks ---------------
@@ -65,7 +66,7 @@ fn print(comptime fmt: []const u8, args: anytype) void {
 pub fn main() !void {
     // allocator which can be shared between threads
     const shared_allocator = blk: {
-        if (std.builtin.link_libc) {
+        if (builtin.link_libc) {
             break :blk std.heap.c_allocator;
         }
 
@@ -222,7 +223,7 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
         const p = percentile / 100.0;
         const i = @round(p * @intToFloat(f64, items.len));
         const v = std.math.min(items.len, @floatToInt(usize, i));
-        latency_percentiles[index] = items[v];
+        latency_percentiles[index] = items[v - 1];
     }
 
     const latency_p50 = latency_percentiles[0];
