@@ -22,12 +22,13 @@ const locks = .{
     //@import("locks/mcs_lock.zig").Lock,
 
     // ------------ System Locks ---------------
-    // @import("locks/os_lock.zig").Lock,
-    // @import("locks/os_raw_lock.zig").Lock,
+    @import("locks/os_lock.zig").Lock,
+    @import("locks/os_raw_lock.zig").Lock,
     //if (utils.is_windows) @import("locks/keyed_event_lock.zig").Lock else void,
 
     // ------------ Custom Locks ---------------
     @import("locks/queue_lock.zig").Lock,
+    @import("locks/stack_lock.zig").Lock,
     //@import("locks/word_lock.zig").Lock,
     //@import("locks/parking_lot.zig").Lock,
 };

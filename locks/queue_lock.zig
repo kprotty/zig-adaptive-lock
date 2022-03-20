@@ -60,21 +60,14 @@ pub const Lock = extern struct {
         var state = self.state.load(.Monotonic);
         
         while (true) {
-            var backoff: usize = 0;
             while (state & locked == 0) {
-                if (self.tryAcquire()) {
+                state = self.state.tryCompareAndSwap(state, state | locked, .Acquire, .Monotonic) orelse {
                     if (has_event) waiter.event.deinit();
                     return;
-                }
-
-                backoff = std.math.min(32, backoff << 1);
-                var i: usize = backoff;
-                while (i > 0) : (i -= 1) std.atomic.spinLoopHint();
-
-                state = self.state.load(.Monotonic);
+                };
             }
 
-            if ((state & queued == 0) and spin < 32) {
+            if ((state & queued == 0) and spin < 100) {
                 spin += 1;
                 std.atomic.spinLoopHint();
                 state = self.state.load(.Monotonic);
