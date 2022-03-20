@@ -154,11 +154,21 @@ pub const SpinWait = struct {
     }
 };
 
-pub const Event = struct {
+pub const Event = switch (builtin.os.tag) {
+    .linux, .macos, .ios, .tvos, .watchos => FutexEvent,
+    .windows => WindowsEvent,
+    else => PosixEvent,
+};
+
+const FutexEvent = struct {
     state: Atomic(u32) = Atomic(u32).init(0),
 
+    pub fn deinit(self: *Event) void {
+        self.* = undefined;
+    }
+
     pub fn reset(self: *Event) void {
-        self.* = .{};
+        self.state.storeUnchecked(0);
     }
 
     pub fn wait(self: *Event) void {
@@ -170,5 +180,116 @@ pub const Event = struct {
     pub fn notify(self: *Event) void {
         self.state.store(1, .Release);
         Futex.wake(&self.state, 1);
+    }
+};
+
+const PosixEvent = struct {
+    cond: std.c.pthread_cond_t = .{},
+    mutex: std.c.pthread_mutex_t = .{},
+    state: enum{ empty, waiting, notified },
+
+    pub fn deinit(self: *Event) void {
+        const rc = std.c.pthread_cond_destroy(&self.cond);
+        std.debug.assert(rc == .SUCCESS or rc == .INVAL);
+
+        const rm = std.c.pthread_mutex_destroy(&self.mutex);
+        std.debug.assert(rm == .SUCCESS or rm == .INVAL);
+    }
+
+    pub fn reset(self: *Event) void {
+        self.state = .empty;
+    }
+
+    pub fn wait(self: *Event) void {
+        std.debug.assert(std.c.pthread_mutex_lock(&self.mutex) == .SUCCESS);
+        defer std.debug.assert(std.c.pthread_mutex_unlock(&self.mutex) == .SUCCESS);
+
+        if (self.state == .notified)
+            return;
+
+        self.state = .waiting;
+        while (self.state == .waiting) {
+            std.debug.assert(std.c.pthread_cond_wait(&self.cond, &self.mutex) == .SUCCESS);
+        }
+    }
+
+    pub fn notify(self: *Event) void {
+        std.debug.assert(std.c.pthread_mutex_lock(&self.mutex) == .SUCCESS);
+        defer std.debug.assert(std.c.pthread_mutex_unlock(&self.mutex) == .SUCCESS);
+
+        const state = self.state;
+        self.state = .notified;
+
+        if (state == .waiting) {
+            std.debug.assert(std.c.pthread_cond_signal(&self.cond) == .SUCCESS);
+        }
+    }
+};
+
+const WindowsEvent = struct {
+    thread_id: Atomic(usize) = Atomic(usize).init(0),
+
+    extern "ntdll" fn NtAlertThreadByThreadId(
+        thread_id: usize,
+    ) callconv(std.os.windows.WINAPI) std.os.windows.NTSTATUS;
+
+    extern "ntdll" fn NtWaitForAlertByThreadId(
+        addr: usize,
+        timeout: ?*std.os.windows.LARGE_INTEGER,
+    ) callconv(std.os.windows.WINAPI) std.os.windows.NTSTATUS;
+
+    pub fn deinit(self: *Event) void {
+        self.* = undefined;
+    }
+
+    pub fn reset(self: *Event) void {
+        self.thread_id.storeUnchecked(0);
+    }
+
+    pub fn wait(self: *Event) void {
+        var tid: usize = std.os.windows.kernel32.GetCurrentThreadId();
+
+        if (self.thread_id.compareAndSwap(0, tid, .Acquire, .Acquire)) |thread_id| {
+            std.debug.assert(thread_id == std.math.maxInt(usize));
+            return;
+        }
+
+        while (true) {
+            const status = NtWaitForAlertByThreadId(@ptrToInt(&self.thread_id), null);
+            if (status != .ALERTED) std.debug.panic("status={} tid={}", .{status, tid});
+            if (self.thread_id.load(.Acquire) == std.math.maxInt(usize)) break;
+        }
+    }
+
+    pub fn notify(self: *Event) void {
+        const tid = self.thread_id.swap(std.math.maxInt(usize), .Release);
+        std.debug.assert(tid != @truncate(usize, 0xaaaaaaaaaaaaaaaa));
+        std.debug.assert(tid != std.math.maxInt(usize));
+
+        if (tid != 0) {
+            const status = NtAlertThreadByThreadId(tid);
+            if (status != .SUCCESS) std.debug.panic("status={} tid={}", .{status, tid});
+        }
+    }
+};
+
+const SpinEvent = struct {
+    notified: Atomic(bool) = Atomic(bool).init(false),
+
+    pub fn deinit(self: *Event) void {
+        self.* = undefined;
+    }
+
+    pub fn reset(self: *Event) void {
+        self.notified.storeUnchecked(false);
+    }
+
+    pub fn wait(self: *Event) void {
+        while (!self.notified.load(.Acquire))
+            std.atomic.spinLoopHint();
+    }
+
+    pub fn notify(self: *Event) void {
+        self.notified.store(true, .Release);
     }
 };

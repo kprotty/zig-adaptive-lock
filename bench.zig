@@ -22,13 +22,12 @@ const locks = .{
     //@import("locks/mcs_lock.zig").Lock,
 
     // ------------ System Locks ---------------
-    @import("locks/os_lock.zig").Lock,
-    @import("locks/os_raw_lock.zig").Lock,
+    // @import("locks/os_lock.zig").Lock,
+    // @import("locks/os_raw_lock.zig").Lock,
     //if (utils.is_windows) @import("locks/keyed_event_lock.zig").Lock else void,
 
     // ------------ Custom Locks ---------------
-    @import("locks/futex_lock.zig").Lock,
-    @import("locks/count_lock.zig").Lock,
+    @import("locks/queue_lock.zig").Lock,
     //@import("locks/word_lock.zig").Lock,
     //@import("locks/parking_lot.zig").Lock,
 };
@@ -72,18 +71,17 @@ pub fn main() !void {
 
         if (utils.is_windows) {
             const Static = struct { var heap = std.heap.HeapAllocator.init(); };
-            Static.heap.heap_handle = std.os.windows.kernel32.GetProcessHeap() orelse @panic("GetProcessHeap");
-            break :blk &Static.heap.allocator;
+            break :blk Static.heap.allocator();
         }
         
         const Static = struct { var gpa = std.heap.GeneralPurposeAllocator(.{}){}; };
-        break :blk &Static.gpa.allocator;
+        break :blk Static.gpa.allocator();
     };
 
     // use an arena allocator for all future allocations
     var arena = std.heap.ArenaAllocator.init(shared_allocator);
     defer arena.deinit();
-    const allocator = &arena.allocator;
+    const allocator = arena.allocator();
 
     var measures = std.ArrayList(Duration).init(allocator);
     defer measures.deinit();
@@ -97,12 +95,14 @@ pub fn main() !void {
     var unlocked = std.ArrayList(WorkUnit).init(allocator);
     defer unlocked.deinit();
 
-    var args = std.process.args();
-    _ = try (args.next(allocator) orelse unreachable);
-    Parser.parse(allocator, &args, &measures, Parser.toMeasure) catch return help();
-    Parser.parse(allocator, &args, &threads, Parser.toThread) catch return help();
-    Parser.parse(allocator, &args, &locked, Parser.toWorkUnit) catch return help(); 
-    Parser.parse(allocator, &args, &unlocked, Parser.toWorkUnit) catch return help();
+    var args = try std.process.ArgIterator.initWithAllocator(allocator);
+    defer args.deinit();
+
+    _ = args.next() orelse unreachable;
+    Parser.parse(&args, &measures, Parser.toMeasure) catch return help();
+    Parser.parse(&args, &threads, Parser.toThread) catch return help();
+    Parser.parse(&args, &locked, Parser.toWorkUnit) catch return help(); 
+    Parser.parse(&args, &unlocked, Parser.toWorkUnit) catch return help();
 
     const nanos_per_work_unit = try WorkUnit.nanosPerUnit();
 
@@ -143,8 +143,8 @@ pub fn main() !void {
 }
 
 const BenchConfig = struct {
-    allocator: *std.mem.Allocator,
-    shared_allocator: *std.mem.Allocator,
+    allocator: std.mem.Allocator,
+    shared_allocator: std.mem.Allocator,
     num_threads: usize,
     measure: Duration,
     work_locked: WorkUnit,
@@ -174,7 +174,7 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
             workers[spawned] = .{
                 .thread = undefined,
                 .arena = std.heap.ArenaAllocator.init(config.shared_allocator),
-                .latencies = std.ArrayList(u64).init(&workers[spawned].arena.allocator),
+                .latencies = std.ArrayList(u64).init(workers[spawned].arena.allocator()),
             };
             workers[spawned].thread = try std.Thread.spawn(.{}, runFn, .{
                 &workers[spawned],
@@ -313,12 +313,11 @@ const Worker = struct {
 
 const Parser = struct {
     fn parse(
-        allocator: *std.mem.Allocator,
         args: *std.process.ArgIterator,
         results: anytype,
         comptime resolveFn: anytype,
     ) !void {
-        var input = try (args.next(allocator) orelse return error.ExpectedArg);
+        var input = args.next() orelse return error.ExpectedArg;
         while (input.len > 0) {
             const a = try Item.read(&input);
             const b = blk: {
