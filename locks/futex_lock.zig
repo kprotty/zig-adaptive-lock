@@ -2,9 +2,6 @@ const std = @import("std");
 const Atomic = std.atomic.Atomic;
 const Futex = std.Thread.Futex;
 
-const builtin = @import("builtin");
-const x86 = builtin.target.cpu.arch.isX86();
-
 pub const Lock = struct {
     state: Atomic(u32) = Atomic(u32).init(unlocked),
 

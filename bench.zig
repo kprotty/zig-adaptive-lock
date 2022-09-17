@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 const locks = .{
     @import("locks/spin_lock.zig"),
     @import("locks/futex_lock.zig"),
-    // @import("locks/os_lock.zig"),
+    @import("locks/os_lock.zig"),
     // @import("locks/queue_lock.zig"),
 };
 
