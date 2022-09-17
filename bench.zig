@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 
 const locks = .{
     @import("locks/spin_lock.zig"),
-    // @import("locks/futex_lock.zig"),
+    @import("locks/futex_lock.zig"),
     // @import("locks/os_lock.zig"),
     // @import("locks/queue_lock.zig"),
 };
@@ -20,7 +20,7 @@ fn help() void {
         \\Usage: zig run bench.zig -OReleaseFast [measure] [threads] [locked] [unlocked]
         \\
         \\where:
-        \\ [measure]:  [csv:time]        \\ List of time spent measuring for each mutex benchmark
+        \\ [measure]:  [csv:time]         \\ List of time spent measuring for each mutex benchmark
         \\ [threads]:  [csv-ranged:count] \\ List of thread counts for each benchmark
         \\ [locked]:   [csv-ranged:time]  \\ List of time spent inside the lock for each benchmark
         \\ [unlocked]: [csv-ranged:time]  \\ List of time spent outside the lock for each benchmark
@@ -404,9 +404,9 @@ const Result = struct {
                 if (value < 1_000) {
                     try std.fmt.format(writer, " {:>7}ns |", .{value});
                 } else if (value < 1_000_000) {
-                    try std.fmt.format(writer, " {d:>7.2}us |", .{@intToFloat(f64, value) / 1_000});
+                    try std.fmt.format(writer, " {d:>7.0}us |", .{@intToFloat(f64, value) / 1_000});
                 } else if (value < 1_000_000_000) {
-                    try std.fmt.format(writer, " {d:>7.2}ms |", .{@intToFloat(f64, value) / 1_000_000});
+                    try std.fmt.format(writer, " {d:>7.0}ms |", .{@intToFloat(f64, value) / 1_000_000});
                 } else {
                     try std.fmt.format(writer, " {d:>7.2}s |", .{@intToFloat(f64, value) / 1_000_000_000});
                 }
