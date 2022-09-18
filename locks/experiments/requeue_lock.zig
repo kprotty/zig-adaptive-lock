@@ -20,12 +20,6 @@ const WindowsEvent = struct {
     fn wait(event: *Event) void {
         @setCold(true);
 
-        // var i: usize = 10;
-        // while (i > 0) : (i -= 1) {
-        //     if (event.tid.load(.Acquire) == 1) return;
-        //     std.atomic.spinLoopHint();
-        // }
-
         const tid = os.windows.kernel32.GetCurrentThreadId();
         assert(tid != 0);
 
@@ -90,10 +84,12 @@ pub const Lock = struct {
 
     const Node = struct {
         event: Event,
+        prev: ?*Node,
         next: ?*Node,
+        tail: ?*Node,
     };
 
-    pub const name = "stack_lock";
+    pub const name = "queue_lock";
 
     pub fn init(self: *Lock) void {
         self.* = .{};
@@ -116,62 +112,91 @@ pub const Lock = struct {
     fn acquireSlow(self: *Lock) void {
         @setCold(true);
 
-        const spin_bound = 8;
+        const spin_bound = 100;
         const backoff_bound = 32;
+        const node_alignment = comptime @intCast(u29, std.math.max(@alignOf(Node), ~node_mask + 1));
 
         var spin: usize = 0;
         var backoff: usize = 0;
-        var node: Node = undefined;
-
+        var state = self.state.load(.Monotonic);
+        var node: Node align(node_alignment) = undefined;
+        
         while (true) {
-            blk: {
-                const state = self.state.load(.Monotonic);
-                if (state & locked_bit == 0) {
-                    if (self.acquireFast()) return;
-                    break :blk;
-                }
+            while (state & locked_bit == 0) {
+                if (self.acquireFast()) return;
+                defer state = self.state.load(.Monotonic);
 
-                const head = @intToPtr(?*Node, state & node_mask);
-                if (head == null and spin < spin_bound) {
+                backoff = std.math.min(backoff_bound, std.math.max(1, backoff * 2));
+                for (@as([backoff_bound]u0, undefined)) |_| {
                     std.atomic.spinLoopHint();
-                    spin += 1;
-                    continue;
                 }
-
-                const new_state = @ptrToInt(&node) | (state & ~node_mask);
-                node.event = .{};
-                node.next = head;
-                
-                _ = self.state.tryCompareAndSwap(state, new_state, .Release, .Monotonic) orelse {
-                    node.event.wait();
-                    backoff = 0;
-                    spin = 0;
-                    continue;
-                };
             }
 
-            backoff = std.math.min(backoff_bound, std.math.max(1, backoff * 2));
-            var iter = backoff;
-            while (iter > 0) : (iter -= 1) std.atomic.spinLoopHint();
+            const head = @intToPtr(?*Node, state & node_mask);
+            if (head == null and spin < spin_bound) {
+                spin += 1;
+                std.atomic.spinLoopHint();
+                state = self.state.load(.Monotonic);
+                continue;
+            }
+
+            node.event = .{};
+            node.prev = null;
+            node.next = head;
+            node.tail = if (head == null) @ptrCast(*Node, &node) else null;
+            
+            const new_state = @ptrToInt(&node) | (state & ~node_mask);
+            state = self.state.tryCompareAndSwap(state, new_state, .Release, .Monotonic) orelse blk: {
+                spin = 0;
+                backoff = 0;
+                node.event.wait();
+                break :blk self.state.load(.Monotonic);
+            };
         }
     }
 
     pub fn release(self: *Lock) void {
-        const state = self.state.compareAndSwap(locked_bit, unlocked, .Release, .Monotonic) orelse return;
-        self.releaseSlow(state);
+        _ = self.state.compareAndSwap(locked_bit, unlocked, .Release, .Monotonic) orelse return;
+        self.releaseSlow();
     }
 
-    fn releaseSlow(self: *Lock, current_state: usize) void {
+    fn releaseSlow(self: *Lock) void {
         @setCold(true);
 
-        var state = current_state;
-        while (true) {
-            self.state.fence(.Acquire);
-            const node = @intToPtr(*Node, state & node_mask);
+        var state = self.state.swap(unlocked, .AcqRel);
+        const head = @intToPtr(*Node, state & node_mask);
+        var tail = head;
 
-            const new_state = @ptrToInt(node.next);
+        while (true) {
+            tail = tail.tail orelse tail;
+            const next = tail.next orelse break;
+            next.prev = tail;
+            tail = next;
+        }
+
+        const new_tail = tail.prev orelse {
+            assert(head == tail);
+            return tail.event.set();
+        };
+
+        state = unlocked;
+        while (true) {
+            var next_tail = new_tail;
+            if (state & locked_bit != 0) {
+                next_tail = tail;
+            }
+
+            const top = @intToPtr(?*Node, state & node_mask);
+            next_tail.next = top;
+            next_tail.tail = if (top == null) next_tail else null;
+
+            head.prev = null;
+            head.tail = next_tail;
+
+            const new_state = @ptrToInt(head) | (state & ~node_mask);
             state = self.state.tryCompareAndSwap(state, new_state, .Release, .Monotonic) orelse {
-                return node.event.set();
+                if (next_tail != tail) tail.event.set();
+                return;
             };
         }
     }
