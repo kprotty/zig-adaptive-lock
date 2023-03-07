@@ -390,7 +390,7 @@ const Result = struct {
                 if (value < 1_000) {
                     try std.fmt.format(writer, " {d:>6} |", .{@round(value)});
                 } else if (value < 1_000_000) {
-                    try std.fmt.format(writer, " {d:>5.0}k |", .{value / 1_000});
+                    try std.fmt.format(writer, " {d:>5.2}k |", .{value / 1_000});
                 } else if (value < 1_000_000_000) {
                     try std.fmt.format(writer, " {d:>5.2}m |", .{value / 1_000_000});
                 } else {
