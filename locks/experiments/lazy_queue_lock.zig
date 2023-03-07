@@ -18,21 +18,16 @@ const Event = struct {
 
 const Link = struct {
     fn get(link: anytype) @TypeOf(link.*.?) {
-        var spin: u32 = 32;
-        while (true) : (std.atomic.spinLoopHint()) {
-            if (@atomicLoad(@TypeOf(link.*), link, .Acquire)) |value| return value;
-            spin = std.math.sub(u32, spin, 1) catch {
-                var event = Event{};
-                const ptr = @intToPtr(@TypeOf(link.*), @ptrToInt(&event));
-                if (@atomicRmw(@TypeOf(link.*), link, .Xchg, ptr, .Release)) |value| {
-                    @ptrCast(*Atomic(@TypeOf(link.*)), link).fence(.Acquire);
-                    return value;
-                }
+        if (@atomicLoad(@TypeOf(link.*), link, .Acquire)) |value| return value;
 
-                event.wait();
-                return link.* orelse unreachable;
-            };
+        var event = Event{};
+        if (@atomicRmw(@TypeOf(link.*), link, .Xchg, @intToPtr(@TypeOf(link.*), @ptrToInt(&event)), .Release)) |value| {
+            @ptrCast(*Atomic(@TypeOf(link.*)), link).fence(.Acquire);
+            return value;
         }
+
+        event.wait();
+        return link.* orelse unreachable;
     }
 
     fn set(link: anytype, value: @TypeOf(link.*.?)) void {
@@ -72,6 +67,18 @@ pub const Lock = struct {
 
     fn acquireSlow(self: *Lock) void {
         @setCold(true);
+
+        var spin: u32 = 32;
+        while (spin > 0) : (spin -= 1) {
+            var state = self.state.load(.Monotonic);
+            if (state == null) state = self.state.compareAndSwap(null, locked, .Acquire, .Monotonic) orelse return;
+            if (state != locked) break;
+            
+            switch (spin) {
+                0 => std.Thread.yield() catch {},
+                else => std.atomic.spinLoopHint(),
+            }
+        }
 
         var waiter = Waiter{};
         while (true) {
