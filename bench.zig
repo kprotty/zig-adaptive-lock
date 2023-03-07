@@ -6,6 +6,7 @@ const locks = .{
     @import("locks/spin_lock.zig"),
     @import("locks/futex_lock.zig"),
     @import("locks/os_lock.zig"),
+
     //@import("locks/queue_lock.zig"),
     //@import("locks/experiments/srwlock.zig"),
 };
@@ -292,7 +293,7 @@ fn bench(comptime Lock: type, config: Config) !Result {
         var guard = Guard{};
         defer {
             guard.stop();
-            for (workers[0..spawned]) |w| w.thread.join();
+            for (workers[0..spawned]) |*w| w.thread.join();
         }
         
         const runFn = Worker.runner(Lock).run;
