@@ -20,14 +20,14 @@ pub const Lock = struct {
     }
 
     pub fn acquire(self: *Lock) void {
-        _ = self.state.tryCompareAndSwap(unlocked, locked, .Acquire, .Monotonic) orelse return;
-        self.acquireSlow();
+        const state = self.state.tryCompareAndSwap(unlocked, locked, .Acquire, .Monotonic) orelse return;
+        self.acquireSlow(state);
     }
 
-    fn acquireSlow(self: *Lock) void {
+    fn acquireSlow(self: *Lock, state: u32) void {
         @setCold(true);
 
-        if (self.state.load(.Monotonic) == contended) {
+        if (state == contended) {
             Futex.wait(&self.state, contended);
         }
 

@@ -2,10 +2,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const locks = .{
+    @import("locks/experiments/lazy_queue_lock.zig"),
     @import("locks/spin_lock.zig"),
     @import("locks/futex_lock.zig"),
     @import("locks/os_lock.zig"),
-    @import("locks/queue_lock.zig"),
+    //@import("locks/queue_lock.zig"),
+    //@import("locks/experiments/srwlock.zig"),
 };
 
 // Circumvent going through std.debug.print
