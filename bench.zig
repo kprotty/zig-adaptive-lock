@@ -2,10 +2,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const locks = .{
+    //@import("locks/experiments/srwlock.zig"),
     @import("locks/experiments/lazy_queue_lock.zig"),
-    @import("locks/spin_lock.zig"),
+    
     @import("locks/futex_lock.zig"),
     @import("locks/os_lock.zig"),
+    @import("locks/spin_lock.zig"),
 
     //@import("locks/queue_lock.zig"),
     //@import("locks/experiments/srwlock.zig"),
@@ -246,7 +248,7 @@ const WorkUnit = struct {
         var timer = try std.time.Timer.start();
 
         var attempts: [10]f64 = undefined;
-        for (attempts) |*attempt| {
+        for (&attempts) |*attempt| {
             const num_works = 100_000;
 
             const start = timer.read();
@@ -347,7 +349,7 @@ fn bench(comptime Lock: type, config: Config) !Result {
     std.sort.sort(u64, items, {}, cmp);
 
     var latency_percentiles: [2]u64 = undefined;
-    for ([_]f64{ 50.0, 99.0 }) |percentile, index| {
+    for ([_]f64{ 50.0, 99.0 }, 0..2) |percentile, index| {
         const p = percentile / 100.0;
         const i = @round(p * @intToFloat(f64, items.len));
         const v = std.math.min(items.len, @floatToInt(usize, i));
