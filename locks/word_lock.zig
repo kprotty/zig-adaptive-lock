@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// 	http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,7 +14,7 @@
 
 const std = @import("std");
 const utils = @import("../utils.zig");
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 
 pub const Lock = extern struct {
     pub const name = "word_lock";
@@ -42,11 +42,11 @@ pub const Lock = extern struct {
     }
 
     pub fn acquire(self: *Lock) void {
-        if (self.state.tryCompareAndSwap(
+        if (self.state.cmpxchgWeak(
             UNLOCKED,
             LOCKED,
-            .Acquire,
-            .Monotonic,
+            .acquire,
+            .monotonic,
         )) |_| {
             self.acquireSlow();
         }
@@ -56,22 +56,22 @@ pub const Lock = extern struct {
         @setCold(true);
 
         var spin = utils.SpinWait{};
-        var state = self.state.load(.Monotonic);
+        var state = self.state.load(.monotonic);
 
         while (true) {
             if (state & LOCKED == 0) {
-                state = self.state.tryCompareAndSwap(
+                state = self.state.cmpxchgWeak(
                     state,
                     state | LOCKED,
-                    .Acquire,
-                    .Monotonic,
+                    .acquire,
+                    .monotonic,
                 ) orelse return;
                 continue;
             }
-            
-            const head = @intToPtr(?*Waiter, state & WAITING);
+
+            const head = @ptrFromInt(?*Waiter, state & WAITING);
             if (head == null and spin.yield()) {
-                state = self.state.load(.Monotonic);
+                state = self.state.load(.monotonic);
                 continue;
             }
 
@@ -83,11 +83,11 @@ pub const Lock = extern struct {
                 .event = utils.Event{},
             };
 
-            if (self.state.tryCompareAndSwap(
+            if (self.state.cmpxchgWeak(
                 state,
-                (state & ~WAITING) | @ptrToInt(&waiter),
-                .Release,
-                .Monotonic,
+                (state & ~WAITING) | @intFromPtr(&waiter),
+                .release,
+                .monotonic,
             )) |updated| {
                 state = updated;
                 continue;
@@ -95,12 +95,12 @@ pub const Lock = extern struct {
 
             waiter.event.wait();
             spin.reset();
-            state = self.state.load(.Monotonic);
+            state = self.state.load(.monotonic);
         }
     }
 
     pub fn release(self: *Lock) void {
-        const state = self.state.fetchSub(LOCKED, .Release);
+        const state = self.state.fetchSub(LOCKED, .release);
         if ((state & WAKING == 0) and (state & WAITING != 0)) {
             self.releaseSlow();
         }
@@ -109,21 +109,21 @@ pub const Lock = extern struct {
     fn releaseSlow(self: *Lock) void {
         @setCold(true);
 
-        var state = self.state.load(.Monotonic);
+        var state = self.state.load(.monotonic);
         while (true) {
             if ((state & (WAKING | LOCKED) != 0) or (state & WAITING == 0))
                 return;
-            state = self.state.tryCompareAndSwap(
+            state = self.state.cmpxchgWeak(
                 state,
                 state | WAKING,
-                .Acquire,
-                .Monotonic,
+                .acquire,
+                .monotonic,
             ) orelse break;
         }
 
         state |= WAKING;
         dequeue: while (true) {
-            const head = @intToPtr(*Waiter, state & WAITING);
+            const head = @ptrFromInt(*Waiter, state & WAITING);
             const tail = head.tail orelse blk: {
                 var current = head;
                 while (true) {
@@ -138,25 +138,25 @@ pub const Lock = extern struct {
             };
 
             if (state & LOCKED != 0) {
-                state = self.state.tryCompareAndSwap(
+                state = self.state.cmpxchgWeak(
                     state,
                     state & ~@as(usize, WAKING),
-                    .AcqRel,
-                    .Acquire,
+                    .acq_rel,
+                    .acquire,
                 ) orelse return;
                 continue;
             }
 
             if (tail.prev) |new_tail| {
                 head.tail = new_tail;
-                _ = self.state.fetchAnd(~@as(usize, WAKING), .Release);
+                _ = self.state.fetchAnd(~@as(usize, WAKING), .release);
             } else {
                 while (true) {
-                    state = self.state.tryCompareAndSwap(
+                    state = self.state.cmpxchgWeak(
                         state,
                         state & LOCKED,
-                        .AcqRel,
-                        .Acquire,
+                        .acq_rel,
+                        .acquire,
                     ) orelse break;
                     if (state & WAITING != 0) {
                         continue :dequeue;

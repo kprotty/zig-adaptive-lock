@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// 	http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,13 +15,13 @@
 const std = @import("std");
 const utils = @import("../utils.zig");
 
-pub const Lock = 
+pub const Lock =
     if (utils.is_windows)
-        WindowsLock
-    else if (utils.is_posix)
-        PosixLock
-    else
-        void;
+    WindowsLock
+else if (utils.is_posix)
+    PosixLock
+else
+    void;
 
 const WindowsLock = extern struct {
     pub const name = "CRITICAL_SECTION";

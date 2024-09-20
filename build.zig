@@ -1,6 +1,6 @@
-const Builder = @import("std").build.Builder;
+const Build = @import("std").Build;
 
-pub fn build(b: *Builder) void {
+pub fn build(b: *Build) void {
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -9,15 +9,18 @@ pub fn build(b: *Builder) void {
 
     // Standard release options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
-    const mode = b.standardReleaseOptions();
+    const optimize = b.standardOptimizeOption(.{});
 
-    const exe = b.addExecutable("bench", "bench.zig");
+    const exe = b.addExecutable(.{
+        .name = "bench",
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("bench.zig"),
+    });
     exe.linkLibC();
-    exe.setTarget(target);
-    exe.setBuildMode(mode);
-    exe.install();
+    b.installArtifact(exe);
 
-    const run_cmd = exe.run();
+    const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
 
     const run_step = b.step("run", "Run the app");

@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// 	http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,18 +13,18 @@
 // limitations under the License.
 
 const std = @import("std");
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const utils = @import("../utils.zig");
 
-pub const Lock = 
+pub const Lock =
     if (utils.is_windows)
-        WindowsLock
-    else if (utils.is_darwin)
-        DarwinLock
-    else if (utils.is_linux)
-        LinuxLock
-    else
-        void;
+    WindowsLock
+else if (utils.is_darwin)
+    DarwinLock
+else if (utils.is_linux)
+    LinuxLock
+else
+    void;
 
 const DarwinLock = extern struct {
     pub const name = "os_unfair_lock";
@@ -94,13 +94,13 @@ const LinuxLock = extern struct {
         }
     }
 
-    inline fn acquireFast(self: *Lock) bool  {
+    inline fn acquireFast(self: *Lock) bool {
         const tid = tls_tid;
-        return tid != 0 and self.state.tryCompareAndSwap(
+        return tid != 0 and self.state.cmpxchgWeak(
             UNLOCKED,
             tid,
-            .Acquire,
-            .Monotonic,
+            .acquire,
+            .monotonic,
         ) == null;
     }
 
@@ -109,37 +109,37 @@ const LinuxLock = extern struct {
 
         var tid = tls_tid;
         if (tid == 0) {
-            tid = @bitCast(u32, std.os.linux.gettid());
+            tid = @bitCast(std.os.linux.gettid());
             tls_tid = tid;
         }
 
         var spin: u8 = 10;
         while (spin > 0) : (spin -= 1) {
-            const state = self.state.load(.Monotonic);
+            const state = self.state.load(.monotonic);
             if (state & FUTEX_WAITERS != 0) break;
             if (state != UNLOCKED) continue;
-            if (self.state.tryCompareAndSwap(UNLOCKED, tid, .Acquire, .Monotonic) == null) return;
+            if (self.state.cmpxchgWeak(UNLOCKED, tid, .acquire, .monotonic) == null) return;
         }
 
         while (true) {
-            if (self.state.load(.Monotonic) == 0) {
-                _ = self.state.compareAndSwap(
+            if (self.state.load(.monotonic) == 0) {
+                _ = self.state.cmpxchgStrong(
                     UNLOCKED,
                     tid,
-                    .Acquire,
-                    .Monotonic,
+                    .acquire,
+                    .monotonic,
                 ) orelse return;
             }
 
             const rc = std.os.linux.syscall4(
                 .futex,
-                @ptrToInt(&self.state),
+                @intFromPtr(&self.state),
                 std.os.linux.FUTEX.PRIVATE_FLAG | std.os.linux.FUTEX.LOCK_PI,
                 undefined,
                 @as(usize, 0),
             );
 
-            switch (std.os.linux.getErrno(rc)) {
+            switch (std.posix.errno(rc)) {
                 .SUCCESS => return,
                 .AGAIN => continue,
                 .NOSYS => unreachable,
@@ -157,11 +157,11 @@ const LinuxLock = extern struct {
         const tid = tls_tid;
         std.debug.assert(tid != 0);
 
-        _ = self.state.compareAndSwap(
+        _ = self.state.cmpxchgStrong(
             tid,
             UNLOCKED,
-            .Release,
-            .Monotonic,
+            .release,
+            .monotonic,
         ) orelse return;
 
         return self.releaseSlow();
@@ -173,13 +173,13 @@ const LinuxLock = extern struct {
         while (true) {
             const rc = std.os.linux.syscall4(
                 .futex,
-                @ptrToInt(&self.state),
+                @intFromPtr(&self.state),
                 std.os.linux.FUTEX.PRIVATE_FLAG | std.os.linux.FUTEX.UNLOCK_PI,
                 undefined,
                 @as(usize, 0),
             );
 
-            switch (std.os.linux.getErrno(rc)) {
+            switch (std.posix.errno(rc)) {
                 .SUCCESS => return,
                 .INVAL => unreachable,
                 .PERM => unreachable,

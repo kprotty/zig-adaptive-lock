@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// 	http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,7 +14,7 @@
 
 const std = @import("std");
 const utils = @import("../utils.zig");
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const Futex = std.Thread.Futex;
 
 pub const Lock = extern struct {
@@ -41,10 +41,10 @@ pub const Lock = extern struct {
 
     inline fn acquireFast(self: *Lock) bool {
         if (utils.is_x86) {
-            return self.state.bitSet(@ctz(u32, LOCKED), .Acquire) == UNLOCKED;
+            return self.state.bitSet(@ctz(u32, LOCKED), .acquire) == UNLOCKED;
         }
 
-        return self.state.tryCompareAndSwap(UNLOCKED, LOCKED, .Acquire, .Monotonic) == null;
+        return self.state.cmpxchgWeak(UNLOCKED, LOCKED, .acquire, .monotonic) == null;
     }
 
     noinline fn acquireSlow(self: *Lock) void {
@@ -52,7 +52,7 @@ pub const Lock = extern struct {
 
         var spin = utils.SpinWait{};
         while (spin.yield()) {
-            switch (self.state.load(.Monotonic)) {
+            switch (self.state.load(.monotonic)) {
                 0 => if (self.acquireFast()) return,
                 1 => continue,
                 2 => break,
@@ -62,15 +62,15 @@ pub const Lock = extern struct {
 
         while (true) : (Futex.wait(&self.state, CONTENDED, null) catch unreachable) {
             if (utils.is_x86) {
-                if (self.state.swap(CONTENDED, .Acquire) == 0) return;
+                if (self.state.swap(CONTENDED, .acquire) == 0) return;
                 continue;
             }
 
-            var state = self.state.load(.Monotonic);
+            var state = self.state.load(.monotonic);
             while (state != CONTENDED) {
                 state = switch (state) {
-                    0 => self.state.tryCompareAndSwap(state, CONTENDED, .Acquire, .Monotonic) orelse return,
-                    1 => self.state.tryCompareAndSwap(state, CONTENDED, .Monotonic, .Monotonic) orelse break,
+                    0 => self.state.cmpxchgWeak(state, CONTENDED, .acquire, .monotonic) orelse return,
+                    1 => self.state.cmpxchgWeak(state, CONTENDED, .monotonic, .monotonic) orelse break,
                     else => unreachable,
                 };
             }
@@ -78,10 +78,10 @@ pub const Lock = extern struct {
     }
 
     pub fn release(self: *Lock) void {
-        if (self.state.swap(UNLOCKED, .Release) != CONTENDED) return;
+        if (self.state.swap(UNLOCKED, .release) != CONTENDED) return;
         return self.releaseSlow();
     }
-    
+
     noinline fn releaseSlow(self: *Lock) void {
         @setCold(true);
 

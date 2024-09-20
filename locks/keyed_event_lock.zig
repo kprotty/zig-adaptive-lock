@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// 	http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,7 +13,7 @@
 // limitations under the License.
 
 const std = @import("std");
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const utils = @import("../utils.zig");
 
 pub const Lock = extern struct {
@@ -35,27 +35,27 @@ pub const Lock = extern struct {
     }
 
     pub fn acquire(self: *Lock) void {
-        if (self.state.bitSet(@ctz(u32, LOCKED), .Acquire) != UNLOCKED) {
+        if (self.state.bitSet(@ctz(u32, LOCKED), .acquire) != UNLOCKED) {
             self.acquireSlow();
         }
     }
 
     fn acquireSlow(self: *Lock) void {
         @setCold(true);
-        
+
         var spin: usize = 100;
-        var state = self.state.load(.Monotonic);
+        var state = self.state.load(.monotonic);
         while (true) {
             if (state & LOCKED == 0) {
-                if (@ptrCast(*Atomic(u8), &self.state).swap(LOCKED, .Acquire) == UNLOCKED) return;
-                //if (self.state.bitSet(@ctz(u32, LOCKED), .Acquire) == UNLOCKED) return;
+                if (@ptrCast(*Atomic(u8), &self.state).swap(LOCKED, .acquire) == UNLOCKED) return;
+                //if (self.state.bitSet(@ctz(u32, LOCKED), .acquire) == UNLOCKED) return;
                 std.atomic.spinLoopHint();
-                state = self.state.load(.Monotonic);
-                // state = self.state.tryCompareAndSwap(
+                state = self.state.load(.monotonic);
+                // state = self.state.cmpxchgWeak(
                 //     state,
                 //     state | LOCKED,
-                //     .Acquire,
-                //     .Monotonic,
+                //     .acquire,
+                //     .monotonic,
                 // ) orelse return;
                 continue;
             }
@@ -63,18 +63,18 @@ pub const Lock = extern struct {
             if (state < WAITING and spin > 0) {
                 spin -= 1;
                 std.atomic.spinLoopHint();
-                state = self.state.load(.Monotonic);
+                state = self.state.load(.monotonic);
                 continue;
             }
 
-            state = self.state.tryCompareAndSwap(
+            state = self.state.cmpxchgWeak(
                 state,
                 state + WAITING,
-                .Monotonic,
-                .Monotonic,
+                .monotonic,
+                .monotonic,
             ) orelse blk: {
                 NtKeyedEvent.call(&self.state, "NtWaitForKeyedEvent");
-                state = self.state.fetchSub(WAKING, .Monotonic);
+                state = self.state.fetchSub(WAKING, .monotonic);
                 break :blk state - WAKING;
             };
         }
@@ -82,14 +82,14 @@ pub const Lock = extern struct {
 
     pub fn release(self: *Lock) void {
         //@ptrCast(*Atomic(u8), &self.state).store(UNLOCKED, .SeqCst);
-        //const state = self.state.load(.Monotonic);
+        //const state = self.state.load(.monotonic);
 
-        const state = asm volatile(
+        const state = asm volatile (
             \\ movb $0, %[ptr]
             \\ lock addl $0, %%gs:0
             \\ movl %[ptr], %[state]
-            : [state] "=r" (-> u32)
-            : [ptr] "*m" (@ptrCast(*Atomic(u8), &self.state))
+            : [state] "=r" (-> u32),
+            : [ptr] "*m" (@ptrCast(*Atomic(u8), &self.state)),
             : "cc", "memory"
         );
 
@@ -101,13 +101,13 @@ pub const Lock = extern struct {
     fn releaseSlow(self: *Lock) void {
         @setCold(true);
 
-        var state = self.state.load(.Monotonic);
+        var state = self.state.load(.monotonic);
         while ((state >= WAITING) and (state & (LOCKED | WAKING) == 0)) {
-            state = self.state.tryCompareAndSwap(
+            state = self.state.cmpxchgWeak(
                 state,
                 (state - WAITING) + WAKING,
-                .Monotonic,
-                .Monotonic,
+                .monotonic,
+                .monotonic,
             ) orelse {
                 NtKeyedEvent.call(&self.state, "NtReleaseKeyedEvent");
                 return;
@@ -128,7 +128,7 @@ pub const NtKeyedEvent = struct {
             const status = std.os.windows.ntdll.NtCreateKeyedEvent(&handle, access_mask, null, 0);
 
             if (status != .SUCCESS) handle = std.os.windows.INVALID_HANDLE_VALUE;
-            if (event_handle.compareAndSwap(null, handle, .Monotonic, .Monotonic)) |current| {
+            if (event_handle.cmpxchgStrong(null, handle, .monotonic, .monotonic)) |current| {
                 if (status != .SUCCESS) std.os.windows.CloseHandle(handle);
                 handle = current orelse unreachable;
             }

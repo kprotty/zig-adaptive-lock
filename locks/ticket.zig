@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// 	http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -38,9 +38,9 @@ pub const Lock = extern struct {
     }
 
     fn acquire(self: *Lock) void {
-        const ticket = @atomicRmw(u16, &self.ticket, .Add, 1, .Monotonic);
+        const ticket = @atomicRmw(u16, &self.ticket, .Add, 1, .monotonic);
         while (true) {
-            const owner = @atomicLoad(u16, &self.owner, .Acquire);
+            const owner = @atomicLoad(u16, &self.owner, .acquire);
             if (owner == ticket)
                 return;
             spinLoopHint();
@@ -49,6 +49,6 @@ pub const Lock = extern struct {
 
     fn release(self: *Lock) void {
         const owner = self.owner;
-        @atomicStore(u16, &self.owner, owner +% 1, .Release);
+        @atomicStore(u16, &self.owner, owner +% 1, .release);
     }
 };

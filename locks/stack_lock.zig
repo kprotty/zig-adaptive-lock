@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// 	http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,7 +16,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const assert = std.debug.assert;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 
 const unlocked = 0;
 const locked = 1;
@@ -41,7 +41,7 @@ pub const Lock = extern struct {
     }
 
     pub inline fn acquire(self: *Lock) void {
-        const state = self.state.tryCompareAndSwap(unlocked, locked, .Acquire, .Monotonic) orelse return;
+        const state = self.state.cmpxchgWeak(unlocked, locked, .acquire, .monotonic) orelse return;
         self.acquireSlow(state);
     }
 
@@ -53,17 +53,17 @@ pub const Lock = extern struct {
 
         while (true) {
             while (state & locked == 0) {
-                state = self.state.tryCompareAndSwap(state, state | locked, .Acquire, .Monotonic) orelse {
+                state = self.state.cmpxchgWeak(state, state | locked, .acquire, .monotonic) orelse {
                     if (has_event) waiter.event.deinit();
                     return;
                 };
             }
 
-            const head = @intToPtr(?*Waiter, state & waiter_mask);
+            const head = @ptrFromInt(?*Waiter, state & waiter_mask);
             if (head == null and spin < 100) {
                 spin += 1;
                 std.atomic.spinLoopHint();
-                state = self.state.load(.Monotonic);
+                state = self.state.load(.monotonic);
                 continue;
             }
 
@@ -73,18 +73,18 @@ pub const Lock = extern struct {
                 waiter.event = .{};
             }
 
-            const new_state = (state & ~waiter_mask) | @ptrToInt(&waiter);
-            state = self.state.tryCompareAndSwap(state, new_state, .Release, .Monotonic) orelse blk: {
+            const new_state = (state & ~waiter_mask) | @intFromPtr(&waiter);
+            state = self.state.cmpxchgWeak(state, new_state, .release, .monotonic) orelse blk: {
                 waiter.event.wait();
                 waiter.event.reset();
                 spin = 0;
-                break :blk self.state.load(.Monotonic);
+                break :blk self.state.load(.monotonic);
             };
         }
     }
 
     pub inline fn release(self: *Lock) void {
-        const state = self.state.compareAndSwap(locked, unlocked, .Release, .Monotonic) orelse return;
+        const state = self.state.cmpxchgStrong(locked, unlocked, .release, .monotonic) orelse return;
         self.releaseSlow(state);
     }
 
@@ -92,12 +92,12 @@ pub const Lock = extern struct {
         var state = current_state;
         while (true) {
             assert(state & locked != 0);
-            const head = @intToPtr(*Waiter, state & waiter_mask);
-            
-            std.atomic.fence(.Acquire);
-            const new_state = @ptrToInt(head.next);
+            const head = @ptrFromInt(*Waiter, state & waiter_mask);
 
-            state = self.state.tryCompareAndSwap(state, new_state, .Release, .Monotonic) orelse {
+            std.atomic.fence(.acquire);
+            const new_state = @intFromPtr(head.next);
+
+            state = self.state.cmpxchgWeak(state, new_state, .release, .monotonic) orelse {
                 return head.event.notify();
             };
         }

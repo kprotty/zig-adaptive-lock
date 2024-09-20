@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// 	http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,7 +19,8 @@ const builtin = @import("builtin");
 const locks = .{
     // ------------ Spin Locks ---------------
     //@import("locks/ticket_lock.zig").Lock,
-    //@import("locks/mcs_lock.zig").Lock,
+    @import("locks/mcs_lock.zig").Lock,
+    @import("locks/stdlib_lock.zig").Lock,
 
     // ------------ System Locks ---------------
     @import("locks/os_lock.zig").Lock,
@@ -27,8 +28,8 @@ const locks = .{
     //if (utils.is_windows) @import("locks/keyed_event_lock.zig").Lock else void,
 
     // ------------ Custom Locks ---------------
-    @import("locks/queue_lock.zig").Lock,
-    @import("locks/stack_lock.zig").Lock,
+    // @import("locks/queue_lock.zig").Lock,
+    // @import("locks/stack_lock.zig").Lock,
     //@import("locks/word_lock.zig").Lock,
     //@import("locks/parking_lot.zig").Lock,
 };
@@ -71,11 +72,15 @@ pub fn main() !void {
         }
 
         if (utils.is_windows) {
-            const Static = struct { var heap = std.heap.HeapAllocator.init(); };
+            const Static = struct {
+                var heap = std.heap.HeapAllocator.init();
+            };
             break :blk Static.heap.allocator();
         }
-        
-        const Static = struct { var gpa = std.heap.GeneralPurposeAllocator(.{}){}; };
+
+        const Static = struct {
+            var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        };
         break :blk Static.gpa.allocator();
     };
 
@@ -102,7 +107,7 @@ pub fn main() !void {
     _ = args.next() orelse unreachable;
     Parser.parse(&args, &measures, Parser.toMeasure) catch return help();
     Parser.parse(&args, &threads, Parser.toThread) catch return help();
-    Parser.parse(&args, &locked, Parser.toWorkUnit) catch return help(); 
+    Parser.parse(&args, &locked, Parser.toWorkUnit) catch return help();
     Parser.parse(&args, &unlocked, Parser.toWorkUnit) catch return help();
 
     const nanos_per_work_unit = try WorkUnit.nanosPerUnit();
@@ -169,7 +174,7 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
             barrier.stop();
             for (workers[0..spawned]) |w| w.thread.join();
         }
-        
+
         const runFn = Worker.getRunner(Lock).run;
         while (spawned < workers.len) : (spawned += 1) {
             workers[spawned] = .{
@@ -199,64 +204,64 @@ fn bench(comptime Lock: type, config: BenchConfig) !Result {
 
     for (workers) |w| {
         sum += w.iters;
-        min = std.math.min(min, w.iters);
-        max = std.math.max(max, w.iters);
+        min = @min(min, w.iters);
+        max = @max(max, w.iters);
         try latencies.appendSlice(w.latencies.items);
     }
 
-    const mean = @intToFloat(f64, sum) / @intToFloat(f64, workers.len);
+    const mean = @as(f64, @floatFromInt(sum)) / @as(f64, @floatFromInt(workers.len));
     var stdev: f64 = 0;
     for (workers) |w| {
-        const r = @intToFloat(f64, w.iters) - mean;
+        const r = @as(f64, @floatFromInt(w.iters)) - mean;
         stdev += r * r;
     }
     if (workers.len > 1) {
-        stdev /= @intToFloat(f64, workers.len - 1);
+        stdev /= @as(f64, @floatFromInt(workers.len)) - 1;
         stdev = @sqrt(stdev);
     }
 
     const items = latencies.items;
     const cmp = comptime std.sort.asc(u64);
-    std.sort.sort(u64, items, {}, cmp);
+    std.mem.sort(u64, items, {}, cmp);
 
     var latency_percentiles: [2]u64 = undefined;
-    for ([_]f64{ 50.0, 99.0 }) |percentile, index| {
+    for ([_]f64{ 50.0, 99.0 }, 0..) |percentile, index| {
         const p = percentile / 100.0;
-        const i = @round(p * @intToFloat(f64, items.len));
-        const v = std.math.min(items.len, @floatToInt(usize, i));
+        const i = @round(p * @as(f64, @floatFromInt(items.len)));
+        const v = @min(items.len, @as(usize, @intFromFloat(i)));
         latency_percentiles[index] = items[v - 1];
     }
 
     const latency_p50 = latency_percentiles[0];
     const latency_p99 = latency_percentiles[1];
-    
+
     return Result{
         .name = Lock.name,
         .mean = mean,
         .stdev = stdev,
-        .min = @intToFloat(f64, min),
-        .max = @intToFloat(f64, max),
-        .sum = @intToFloat(f64, sum),
+        .min = @as(f64, @floatFromInt(min)),
+        .max = @as(f64, @floatFromInt(max)),
+        .sum = @as(f64, @floatFromInt(sum)),
         .@"lat. <50%" = latency_p50,
         .@"lat. <99%" = latency_p99,
     };
 }
 
 const Barrier = struct {
-    state: std.atomic.Atomic(u32) = std.atomic.Atomic(u32).init(0),
+    state: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     fn wait(self: *const Barrier) void {
-        while (self.state.load(.Acquire) == 0) {
-            std.Thread.Futex.wait(&self.state, 0, null) catch unreachable;
+        while (self.state.load(.acquire) == 0) {
+            std.Thread.Futex.wait(&self.state, 0);
         }
     }
 
     fn isRunning(self: *const Barrier) bool {
-        return self.state.load(.Acquire) == 1;
+        return self.state.load(.acquire) == 1;
     }
 
     fn wake(self: *Barrier, value: u32) void {
-        self.state.store(value, .Release);
+        self.state.store(value, .release);
         std.Thread.Futex.wake(&self.state, std.math.maxInt(u32));
     }
 
@@ -284,7 +289,7 @@ const Worker = struct {
                 work_locked: WorkUnit,
                 work_unlocked: WorkUnit,
             ) void {
-                var prng = @as(u64, @ptrToInt(self) ^ @ptrToInt(lock));
+                var prng = @as(u64, @intFromPtr(self) ^ @intFromPtr(lock));
                 var locked: u64 = 0;
                 var unlocked: u64 = 0;
 
@@ -352,11 +357,11 @@ const Parser = struct {
                 return error.InvalidThreadRange;
             var thread = a.value;
             while (thread <= real_b.value) : (thread += 1)
-                try results.append(@intCast(usize, thread));
+                try results.append(@intCast(thread));
         } else if (a.mult != null) {
             return error.ThreadsTakeValuesNotTimeUnits;
         } else {
-            try results.append(@intCast(usize, a.value));
+            try results.append(@intCast(a.value));
         }
     }
 
@@ -401,7 +406,7 @@ const Parser = struct {
 
             var mult: ?u64 = null;
             if (buf.len > 0 and buf[0] != '-' and buf[0] != ',') {
-                var m: u64 = switch (buf[0]) {
+                const m: u64 = switch (buf[0]) {
                     'n' => 1,
                     'u' => std.time.ns_per_us,
                     'm' => std.time.ns_per_ms,
@@ -440,7 +445,7 @@ const Result = struct {
 
     fn toStr(comptime int: u8) []const u8 {
         if (int < 10)
-            return &[_]u8{ '0' + int };
+            return &[_]u8{'0' + int};
         return &[_]u8{
             '0' + (int / 10),
             '0' + (int % 10),
@@ -455,12 +460,12 @@ const Result = struct {
     ) !void {
         _ = fmt;
         _ = options;
-        
-        const name_fmt = "{s:<" ++ toStr(name_align) ++ "} |";
+
+        const name_fmt = "{s:<" ++ comptime toStr(name_align) ++ "} |";
         const name: []const u8 = self.name orelse "name"[0..];
         try std.fmt.format(writer, name_fmt, .{name});
 
-        inline for ([_][]const u8 {
+        inline for ([_][]const u8{
             "mean",
             "stdev",
             "min",
@@ -483,7 +488,7 @@ const Result = struct {
             }
         }
 
-        inline for ([_][]const u8 {
+        inline for ([_][]const u8{
             "lat. <50%",
             "lat. <99%",
         }) |field| {
@@ -492,11 +497,11 @@ const Result = struct {
                 if (value < 1_000) {
                     try std.fmt.format(writer, " {:>" ++ toStr(valign - 2) ++ "}ns |", .{value});
                 } else if (value < 1_000_000) {
-                    try std.fmt.format(writer, " {d:>" ++ toStr(valign - 2) ++ ".2}us |", .{@intToFloat(f64, value) / 1_000});
+                    try std.fmt.format(writer, " {d:>" ++ toStr(valign - 2) ++ ".2}us |", .{@as(f64, @floatFromInt(value)) / 1_000});
                 } else if (value < 1_000_000_000) {
-                    try std.fmt.format(writer, " {d:>" ++ toStr(valign - 2) ++ ".2}ms |", .{@intToFloat(f64, value) / 1_000_000});
+                    try std.fmt.format(writer, " {d:>" ++ toStr(valign - 2) ++ ".2}ms |", .{@as(f64, @floatFromInt(value)) / 1_000_000});
                 } else {
-                    try std.fmt.format(writer, " {d:>" ++ toStr(valign - 1) ++ ".2}s |", .{@intToFloat(f64, value) / 1_000_000_000});
+                    try std.fmt.format(writer, " {d:>" ++ toStr(valign - 1) ++ ".2}s |", .{@as(f64, @floatFromInt(value)) / 1_000_000_000});
                 }
             } else {
                 try std.fmt.format(writer, " {s:>" ++ toStr(valign) ++ "} |", .{field});
@@ -511,19 +516,19 @@ const WorkUnit = struct {
 
     fn nanosPerUnit() !f64 {
         var attempts: [10]f64 = undefined;
-        for (attempts) |*attempt| {
+        for (&attempts) |*attempt| {
             const num_works = 10_000;
             const start = utils.nanotime();
 
             WorkUnit.run(num_works);
-            const elapsed = @intToFloat(f64, utils.nanotime() - start);
+            const elapsed = @as(f64, @floatFromInt(utils.nanotime() - start));
             attempt.* = elapsed / @as(f64, num_works);
         }
 
         var sum: f64 = 0;
         for (attempts) |attempt|
             sum += attempt;
-        return sum / @intToFloat(f64, attempts.len);
+        return sum / @as(f64, @floatFromInt(attempts.len));
     }
 
     fn scaled(self: WorkUnit, ns_per_unit: f64) WorkUnit {
@@ -534,7 +539,7 @@ const WorkUnit = struct {
     }
 
     fn scale(value: u64, ns_per_unit: f64) u64 {
-        return @floatToInt(u64, @intToFloat(f64, value) / ns_per_unit);
+        return @intFromFloat(@as(f64, @floatFromInt(value)) / ns_per_unit);
     }
 
     fn count(self: WorkUnit, prng: *u64) u64 {
@@ -548,7 +553,7 @@ const WorkUnit = struct {
             prng.* = xs;
             break :blk xs;
         };
-        return std.math.max(1, (rng % (max - min + 1)) + min);
+        return @max(1, (rng % (max - min + 1)) + min);
     }
 
     fn work() void {
@@ -573,7 +578,7 @@ const WorkUnit = struct {
         const from_duration = Duration{ .nanos = self.from };
         if (self.to) |to| {
             const to_duration = Duration{ .nanos = to };
-            try std.fmt.format(writer, "rand({}, {})", .{from_duration, to_duration});   
+            try std.fmt.format(writer, "rand({}, {})", .{ from_duration, to_duration });
         } else {
             try std.fmt.format(writer, "{}", .{from_duration});
         }

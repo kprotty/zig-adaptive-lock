@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// 	http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,7 +14,7 @@
 
 const std = @import("std");
 const utils = @import("../utils.zig");
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const Futex = utils.Futex;
 
 pub const Lock = extern struct {
@@ -33,7 +33,7 @@ pub const Lock = extern struct {
         tail: *Waiter,
         futex: Atomic(u32),
     };
-    
+
     pub fn init(self: *Lock) void {
         self.* = .{};
     }
@@ -43,7 +43,7 @@ pub const Lock = extern struct {
     }
 
     pub fn acquire(self: *Lock) void {
-        if (self.state.tryCompareAndSwap(UNLOCKED, LOCKED, .Acquire, .Monotonic) == null) return;
+        if (self.state.cmpxchgWeak(UNLOCKED, LOCKED, .acquire, .monotonic) == null) return;
         self.acquireSlow();
     }
 
@@ -51,28 +51,28 @@ pub const Lock = extern struct {
         @setCold(true);
 
         var spin = utils.SpinWait{};
-        var state = self.state.load(.Monotonic);
+        var state = self.state.load(.monotonic);
 
         while (true) {
             if (state & LOCKED == 0) {
-                state = self.state.tryCompareAndSwap(state, state | LOCKED, .Acquire, .Monotonic) orelse return;
+                state = self.state.cmpxchgWeak(state, state | LOCKED, .acquire, .monotonic) orelse return;
                 continue;
             }
 
             if (state & PARKED == 0) blk: {
                 if (spin.yield()) {
-                    state = self.state.load(.Monotonic);
+                    state = self.state.load(.monotonic);
                     continue;
                 }
 
-                state = self.state.tryCompareAndSwap(state, state | PARKED, .Monotonic, .Monotonic) orelse break :blk;
+                state = self.state.cmpxchgWeak(state, state | PARKED, .monotonic, .monotonic) orelse break :blk;
                 continue;
             }
 
             wait: {
                 self.pl_lock.acquire();
 
-                state = self.state.load(.Monotonic);
+                state = self.state.load(.monotonic);
                 if (state != (LOCKED | PARKED)) {
                     self.pl_lock.release();
                     break :wait;
@@ -90,18 +90,18 @@ pub const Lock = extern struct {
                 }
 
                 self.pl_lock.release();
-                while (waiter.futex.load(.Acquire) == 0) {
+                while (waiter.futex.load(.acquire) == 0) {
                     Futex.wait(&waiter.futex, 0, null) catch unreachable;
                 }
             }
 
             spin.reset();
-            state = self.state.load(.Monotonic);
+            state = self.state.load(.monotonic);
         }
     }
 
     pub fn release(self: *Lock) void {
-        if (self.state.compareAndSwap(LOCKED, UNLOCKED, .Release, .Monotonic) == null) return;
+        if (self.state.cmpxchgStrong(LOCKED, UNLOCKED, .release, .monotonic) == null) return;
         self.releaseSlow();
     }
 
@@ -119,11 +119,11 @@ pub const Lock = extern struct {
         }
 
         const new_state = if (waiter == null) @as(u8, UNLOCKED) else PARKED;
-        self.state.store(new_state, .Release);
-        
+        self.state.store(new_state, .release);
+
         self.pl_lock.release();
         if (waiter) |w| {
-            w.futex.store(1, .Release);
+            w.futex.store(1, .release);
             Futex.wake(&w.futex, 1);
         }
     }

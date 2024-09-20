@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// 	http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,7 +14,7 @@
 
 const std = @import("std");
 const utils = @import("../utils.zig");
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const Futex = std.Thread.Futex;
 
 pub const Lock = extern struct {
@@ -38,8 +38,8 @@ pub const Lock = extern struct {
     threadlocal var waiter: Waiter = undefined;
 
     pub fn acquire(self: *Lock) void {
-        waiter.next.storeUnchecked(0);
-        const prev = self.tail.swap(&waiter, .AcqRel) orelse return;
+        waiter.next.raw = 0;
+        const prev = self.tail.swap(&waiter, .acq_rel) orelse return;
         acquireSlow(prev);
     }
 
@@ -47,28 +47,28 @@ pub const Lock = extern struct {
         @setCold(true);
 
         waiter.futex = Atomic(u32).init(0);
-        prev.next.store(@ptrToInt(&waiter), .Release);
+        prev.next.store(@intFromPtr(&waiter), .release);
 
         var spin = utils.SpinWait{};
-        while (waiter.futex.load(.Acquire) == 0) {
+        while (waiter.futex.load(.acquire) == 0) {
             if (!spin.yield()) utils.yieldThread(1);
         }
     }
 
     pub fn release(self: *Lock) void {
-        _ = self.tail.compareAndSwap(&waiter, null, .Release, .Monotonic) orelse return;
+        _ = self.tail.cmpxchgStrong(&waiter, null, .release, .monotonic) orelse return;
         releaseSlow();
     }
 
     fn releaseSlow() void {
         @setCold(true);
-        
+
         var spin = utils.SpinWait{};
         while (true) : ({
             if (!spin.yield()) utils.yieldThread(1);
         }) {
-            const next = @intToPtr(?*Waiter, waiter.next.load(.Acquire)) orelse continue;
-            next.futex.store(1, .Release);
+            const next = @as(?*Waiter, @ptrFromInt(waiter.next.load(.acquire))) orelse continue;
+            next.futex.store(1, .release);
             return;
         }
     }

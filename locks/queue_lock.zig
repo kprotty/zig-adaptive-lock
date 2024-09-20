@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// 	http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,7 +16,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const assert = std.debug.assert;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 
 const unlocked = 0;
 const locked = 1;
@@ -45,7 +45,7 @@ pub const Lock = extern struct {
     }
 
     inline fn tryAcquire(self: *Lock) bool {
-        return self.state.bitSet(@ctz(usize, locked), .Acquire) == 0;
+        return self.state.bitSet(@ctz(usize, locked), .acquire) == 0;
     }
 
     pub inline fn acquire(self: *Lock) void {
@@ -57,11 +57,11 @@ pub const Lock = extern struct {
         var spin: usize = 0;
         var has_event = false;
         var waiter: Waiter = undefined;
-        var state = self.state.load(.Monotonic);
-        
+        var state = self.state.load(.monotonic);
+
         while (true) {
             while (state & locked == 0) {
-                state = self.state.tryCompareAndSwap(state, state | locked, .Acquire, .Monotonic) orelse {
+                state = self.state.cmpxchgWeak(state, state | locked, .acquire, .monotonic) orelse {
                     if (has_event) waiter.event.deinit();
                     return;
                 };
@@ -70,7 +70,7 @@ pub const Lock = extern struct {
             if ((state & queued == 0) and spin < 100) {
                 spin += 1;
                 std.atomic.spinLoopHint();
-                state = self.state.load(.Monotonic);
+                state = self.state.load(.monotonic);
                 continue;
             }
 
@@ -79,7 +79,7 @@ pub const Lock = extern struct {
                 waiter.event = .{};
             }
 
-            var new_state = (state & ~waiter_mask) | @ptrToInt(&waiter) | queued;
+            var new_state = (state & ~waiter_mask) | @intFromPtr(&waiter) | queued;
             if (state & queued == 0) {
                 assert(state & waiter_mask == 0);
                 waiter.tail = &waiter;
@@ -88,25 +88,25 @@ pub const Lock = extern struct {
             } else {
                 new_state |= queue_locked;
                 waiter.tail = null;
-                waiter.next = @intToPtr(?*Waiter, state & waiter_mask);
+                waiter.next = @ptrFromInt(?*Waiter, state & waiter_mask);
                 waiter.prev = null;
             }
 
-            state = self.state.tryCompareAndSwap(state, new_state, .Release, .Monotonic) orelse blk: {
+            state = self.state.cmpxchgWeak(state, new_state, .release, .monotonic) orelse blk: {
                 if (state & (queued | queue_locked) == queued) {
                     self.linkQueueOrUnpark(new_state);
                 }
-                
+
                 spin = 0;
                 waiter.event.wait();
                 waiter.event.reset();
-                break :blk self.state.load(.Monotonic);
+                break :blk self.state.load(.monotonic);
             };
         }
     }
 
     pub inline fn release(self: *Lock) void {
-        const state = self.state.compareAndSwap(locked, unlocked, .Release, .Monotonic) orelse return;
+        const state = self.state.cmpxchgStrong(locked, unlocked, .release, .monotonic) orelse return;
         self.releaseSlow(state);
     }
 
@@ -119,7 +119,7 @@ pub const Lock = extern struct {
             var new_state = state & ~@as(usize, locked);
             new_state |= queue_locked;
 
-            state = self.state.tryCompareAndSwap(state, new_state, .Release, .Monotonic) orelse {
+            state = self.state.cmpxchgWeak(state, new_state, .release, .monotonic) orelse {
                 if (state & queue_locked == 0) self.unpark(new_state);
                 return;
             };
@@ -134,11 +134,11 @@ pub const Lock = extern struct {
                 return self.unpark(state);
             }
 
-            std.atomic.fence(.Acquire);
+            std.atomic.fence(.acquire);
             _ = self.getAndLinkQueue(state);
 
-            const new_state = state & ~@as(usize, queue_locked); 
-            state = self.state.tryCompareAndSwap(state, new_state, .Release, .Monotonic) orelse return;
+            const new_state = state & ~@as(usize, queue_locked);
+            state = self.state.cmpxchgWeak(state, new_state, .release, .monotonic) orelse return;
         }
     }
 
@@ -148,22 +148,22 @@ pub const Lock = extern struct {
             assert(state & (queued | queue_locked) == (queued | queue_locked));
             if (state & locked != 0) {
                 const new_state = state & ~@as(usize, queue_locked);
-                state = self.state.tryCompareAndSwap(state, new_state, .Release, .Monotonic) orelse return;
+                state = self.state.cmpxchgWeak(state, new_state, .release, .monotonic) orelse return;
                 continue;
             }
 
-            std.atomic.fence(.Acquire);
+            std.atomic.fence(.acquire);
             const queue = self.getAndLinkQueue(state);
             assert(queue.head.tail == queue.tail);
 
             if (queue.tail.prev) |new_tail| {
                 queue.head.tail = new_tail;
-                _ = self.state.fetchAnd(~@as(usize, queue_locked), .Release);
+                _ = self.state.fetchAnd(~@as(usize, queue_locked), .release);
                 return queue.tail.event.notify();
             }
 
             const new_state = unlocked;
-            state = self.state.tryCompareAndSwap(state, new_state, .Release, .Monotonic) orelse {
+            state = self.state.cmpxchgWeak(state, new_state, .release, .monotonic) orelse {
                 return queue.tail.event.notify();
             };
         }
@@ -179,7 +179,7 @@ pub const Lock = extern struct {
         assert(state & (queued | queue_locked) == (queued | queue_locked));
 
         var queue: Queue = undefined;
-        queue.head = @intToPtr(*Waiter, state & waiter_mask);
+        queue.head = @ptrFromInt(*Waiter, state & waiter_mask);
         queue.tail = queue.head.tail orelse blk: {
             var current = queue.head;
             while (true) {

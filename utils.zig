@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// 	http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,7 +18,7 @@ const arch = target.cpu.arch;
 const os_tag = target.os.tag;
 const builtin = @import("builtin");
 
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 
 pub const Futex = std.Thread.Futex;
 
@@ -40,23 +40,7 @@ pub const is_darwin = switch (os_tag) {
 };
 
 pub const is_posix = builtin.link_libc and (switch (os_tag) {
-    .linux,
-    .minix,
-    .macos,
-    .watchos,
-    .tvos,
-    .ios,
-    .solaris,
-    .aix,
-    .openbsd,
-    .kfreebsd,
-    .freebsd,
-    .netbsd,
-    .dragonfly,
-    .hermit,
-    .haiku,
-    .cloudabi,
-    .fuchsia => true,
+    .linux, .minix, .macos, .watchos, .tvos, .ios, .solaris, .aix, .openbsd, .kfreebsd, .freebsd, .netbsd, .dragonfly, .hermit, .haiku, .cloudabi, .fuchsia => true,
     else => false,
 });
 
@@ -72,7 +56,7 @@ pub fn yieldThread(iterations: usize) void {
     while (i != 0) : (i -= 1) {
         switch (os_tag) {
             .windows => _ = std.os.windows.kernel32.SwitchToThread(),
-            else => _ = std.os.system.sched_yield(),
+            else => _ = std.Thread.yield() catch unreachable,
         }
     }
 }
@@ -85,15 +69,15 @@ pub fn nanotime() u64 {
             var frequency = Atomic(u64).init(0);
         };
 
-        var freq = Static.frequency.load(.Monotonic);
+        var freq = Static.frequency.load(.monotonic);
         if (freq == 0) {
             freq = std.os.windows.QueryPerformanceFrequency();
-            Static.frequency.store(freq, .Monotonic);
+            Static.frequency.store(freq, .monotonic);
         }
 
-        var delta = Static.delta.load(.Monotonic);
+        var delta = Static.delta.load(.monotonic);
         if (delta == 0) {
-            delta = Static.delta.compareAndSwap(0, now, .Monotonic, .Monotonic) orelse now;
+            delta = Static.delta.cmpxchgStrong(0, now, .monotonic, .monotonic) orelse now;
         }
 
         if (now < delta) now = delta;
@@ -103,17 +87,17 @@ pub fn nanotime() u64 {
     if (is_darwin) {
         const now = std.os.darwin.mach_absolute_time();
         const Static = struct {
-            var info: std.os.darwin.mach_timebase_info_data = undefined;
+            var info: std.c.darwin.mach_timebase_info_data = .{ .numer = 0, .denom = 0 };
             var delta = Atomic(u64).init(0);
         };
 
-        if (@atomicLoad(u32, &Static.info.numer, .Monotonic) == 0) {
-            std.os.darwin.mach_timebase_info(&Static.info);
+        if (@atomicLoad(u32, &Static.info.numer, .monotonic) == 0) {
+            std.c.darwin.mach_timebase_info(&Static.info);
         }
-        
-        var delta = Static.delta.load(.Monotonic);
+
+        var delta = Static.delta.load(.monotonic);
         if (delta == 0) {
-            delta = Static.delta.compareAndSwap(0, now, .Monotonic, .Monotonic) orelse now;
+            delta = Static.delta.cmpxchgStrong(0, now, .monotonic, .monotonic) orelse now;
         }
 
         var current = now - delta;
@@ -122,9 +106,9 @@ pub fn nanotime() u64 {
         return current;
     }
 
-    var ts: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &ts) catch unreachable;
-    return @intCast(u64, ts.tv_sec) * std.time.ns_per_s + @intCast(u64, ts.tv_nsec);
+    var ts: std.c.timespec = undefined;
+    std.posix.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts) catch unreachable;
+    return @as(u64, @intCast(ts.tv_sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.tv_nsec));
 }
 
 pub const SpinWait = struct {
@@ -168,17 +152,17 @@ const FutexEvent = struct {
     }
 
     pub fn reset(self: *Event) void {
-        self.state.storeUnchecked(0);
+        self.state.raw = 0;
     }
 
     pub fn wait(self: *Event) void {
-        while (self.state.load(.Acquire) == 0) {
+        while (self.state.load(.acquire) == 0) {
             Futex.wait(&self.state, 0, null) catch unreachable;
         }
     }
 
     pub fn notify(self: *Event) void {
-        self.state.store(1, .Release);
+        self.state.store(1, .release);
         Futex.wake(&self.state, 1);
     }
 };
@@ -186,7 +170,7 @@ const FutexEvent = struct {
 const PosixEvent = struct {
     cond: std.c.pthread_cond_t = .{},
     mutex: std.c.pthread_mutex_t = .{},
-    state: enum{ empty, waiting, notified },
+    state: enum { empty, waiting, notified },
 
     pub fn deinit(self: *Event) void {
         const rc = std.c.pthread_cond_destroy(&self.cond);
@@ -243,32 +227,32 @@ const WindowsEvent = struct {
     }
 
     pub fn reset(self: *Event) void {
-        self.thread_id.storeUnchecked(0);
+        self.thread_id.raw = 0;
     }
 
     pub fn wait(self: *Event) void {
-        var tid: usize = std.os.windows.kernel32.GetCurrentThreadId();
+        const tid: usize = std.os.windows.kernel32.GetCurrentThreadId();
 
-        if (self.thread_id.compareAndSwap(0, tid, .Acquire, .Acquire)) |thread_id| {
+        if (self.thread_id.cmpxchgStrong(0, tid, .acquire, .acquire)) |thread_id| {
             std.debug.assert(thread_id == std.math.maxInt(usize));
             return;
         }
 
         while (true) {
-            const status = NtWaitForAlertByThreadId(@ptrToInt(&self.thread_id), null);
-            if (status != .ALERTED) std.debug.panic("status={} tid={}", .{status, tid});
-            if (self.thread_id.load(.Acquire) == std.math.maxInt(usize)) break;
+            const status = NtWaitForAlertByThreadId(@intFromPtr(&self.thread_id), null);
+            if (status != .ALERTED) std.debug.panic("status={} tid={}", .{ status, tid });
+            if (self.thread_id.load(.acquire) == std.math.maxInt(usize)) break;
         }
     }
 
     pub fn notify(self: *Event) void {
-        const tid = self.thread_id.swap(std.math.maxInt(usize), .Release);
-        std.debug.assert(tid != @truncate(usize, 0xaaaaaaaaaaaaaaaa));
+        const tid = self.thread_id.swap(std.math.maxInt(usize), .release);
+        std.debug.assert(tid != @as(usize, @truncate(0xaaaaaaaaaaaaaaaa)));
         std.debug.assert(tid != std.math.maxInt(usize));
 
         if (tid != 0) {
             const status = NtAlertThreadByThreadId(tid);
-            if (status != .SUCCESS) std.debug.panic("status={} tid={}", .{status, tid});
+            if (status != .SUCCESS) std.debug.panic("status={} tid={}", .{ status, tid });
         }
     }
 };
@@ -281,15 +265,15 @@ const SpinEvent = struct {
     }
 
     pub fn reset(self: *Event) void {
-        self.notified.storeUnchecked(false);
+        self.notified.raw = false;
     }
 
     pub fn wait(self: *Event) void {
-        while (!self.notified.load(.Acquire))
+        while (!self.notified.load(.acquire))
             std.atomic.spinLoopHint();
     }
 
     pub fn notify(self: *Event) void {
-        self.notified.store(true, .Release);
+        self.notified.store(true, .release);
     }
 };

@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// 	http://www.apache.org/licenses/LICENSE-2.0
+// http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,7 +14,7 @@
 
 const std = @import("std");
 const utils = @import("../utils.zig");
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 
 pub const Lock = extern struct {
     pub const name = "ticket_lock";
@@ -32,9 +32,9 @@ pub const Lock = extern struct {
 
     pub fn acquire(self: *Lock) void {
         var spin = utils.SpinWait{};
-        const ticket = self.ticket.fetchAdd(1, .Monotonic);
+        const ticket = self.ticket.fetchAdd(1, .monotonic);
 
-        while (self.owner.load(.Acquire) != ticket) {
+        while (self.owner.load(.acquire) != ticket) {
             if (!spin.yield()) {
                 utils.yieldThread(1);
             }
@@ -43,6 +43,6 @@ pub const Lock = extern struct {
 
     pub fn release(self: *Lock) void {
         const new_owner = self.owner.loadUnchecked() +% 1;
-        self.owner.store(new_owner, .Release);
+        self.owner.store(new_owner, .release);
     }
 };
