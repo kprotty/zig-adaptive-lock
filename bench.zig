@@ -18,12 +18,12 @@ const builtin = @import("builtin");
 
 const locks = .{
     // ------------ Spin Locks ---------------
-    //@import("locks/ticket_lock.zig").Lock,
-    @import("locks/mcs_lock.zig").Lock,
+    // @import("locks/ticket_lock.zig").Lock,
+    // @import("locks/mcs_lock.zig").Lock,
     @import("locks/stdlib_lock.zig").Lock,
 
     // ------------ System Locks ---------------
-    @import("locks/os_lock.zig").Lock,
+    // @import("locks/os_lock.zig").Lock,
     @import("locks/os_raw_lock.zig").Lock,
     //if (utils.is_windows) @import("locks/keyed_event_lock.zig").Lock else void,
 

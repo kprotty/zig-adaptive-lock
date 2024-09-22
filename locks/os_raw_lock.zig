@@ -86,35 +86,37 @@ const LinuxLock = extern struct {
         self.* = undefined;
     }
 
-    threadlocal var tls_tid: u32 = 0;
-
     pub fn acquire(self: *Lock) void {
-        if (!self.acquireFast()) {
-            self.acquireSlow();
+        if (!self.tryLock()) {
+            self.lockSlow();
         }
     }
 
-    inline fn acquireFast(self: *Lock) bool {
-        const tid = tls_tid;
-        return tid != 0 and self.state.cmpxchgWeak(
+    fn tryLock(self: *Lock) bool {
+        // the fastpath to acquiring this futex, we attempt to set the state
+        // to our TID. if this succeeds, it lets us skip the syscall.
+        return self.state.cmpxchgStrong(
             UNLOCKED,
-            tid,
+            std.Thread.getCurrentId(),
             .acquire,
             .monotonic,
         ) == null;
     }
 
-    fn acquireSlow(self: *Lock) void {
+    fn lockSlow(self: *Lock) void {
         @setCold(true);
 
-        var tid = tls_tid;
-        if (tid == 0) {
-            tid = @bitCast(std.os.linux.gettid());
-            tls_tid = tid;
-        }
-
-        var spin: u8 = 10;
+        // if we got here, another task is contending the lock.
+        // the FUTEX_WAITERS bit is set when the kernel determines
+        // there are other threads waiting on the futex.
+        //
+        // we try to spin if FUTEX_WAITERS isn't set as there's a
+        // possiblity we can acquire the futex without blocking on the
+        // rt-mutex.
+        const tid = std.Thread.getCurrentId();
+        var spin: usize = 1_000;
         while (spin > 0) : (spin -= 1) {
+            std.atomic.spinLoopHint();
             const state = self.state.load(.monotonic);
             if (state & FUTEX_WAITERS != 0) break;
             if (state != UNLOCKED) continue;
@@ -136,7 +138,7 @@ const LinuxLock = extern struct {
                 @intFromPtr(&self.state),
                 std.os.linux.FUTEX.PRIVATE_FLAG | std.os.linux.FUTEX.LOCK_PI,
                 undefined,
-                @as(usize, 0),
+                0,
             );
 
             switch (std.posix.errno(rc)) {
@@ -147,44 +149,39 @@ const LinuxLock = extern struct {
                 .FAULT => unreachable,
                 .INVAL => unreachable,
                 .PERM => unreachable,
-                .NOMEM => @panic("kernel OOM"),
+                .NOMEM => unreachable, // the kernel ran out of memory, not user-space OOM
                 else => unreachable,
             }
         }
     }
 
     pub fn release(self: *Lock) void {
-        const tid = tls_tid;
-        std.debug.assert(tid != 0);
-
+        const tid = std.Thread.getCurrentId();
         _ = self.state.cmpxchgStrong(
             tid,
             UNLOCKED,
             .release,
             .monotonic,
         ) orelse return;
-
         return self.releaseSlow();
     }
 
     fn releaseSlow(self: *Lock) void {
         @setCold(true);
 
-        while (true) {
-            const rc = std.os.linux.syscall4(
-                .futex,
-                @intFromPtr(&self.state),
-                std.os.linux.FUTEX.PRIVATE_FLAG | std.os.linux.FUTEX.UNLOCK_PI,
-                undefined,
-                @as(usize, 0),
-            );
+        const rc = std.os.linux.syscall4(
+            .futex,
+            @intFromPtr(&self.state),
+            std.os.linux.FUTEX.PRIVATE_FLAG | std.os.linux.FUTEX.UNLOCK_PI,
+            undefined,
+            0,
+        );
 
-            switch (std.posix.errno(rc)) {
-                .SUCCESS => return,
-                .INVAL => unreachable,
-                .PERM => unreachable,
-                else => unreachable,
-            }
+        switch (std.posix.errno(rc)) {
+            .SUCCESS => return,
+            .INVAL => unreachable,
+            .PERM => unreachable,
+            else => unreachable,
         }
     }
 };
