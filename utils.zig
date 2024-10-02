@@ -23,7 +23,7 @@ const Atomic = std.atomic.Value;
 pub const Futex = std.Thread.Futex;
 
 pub const is_x86 = switch (arch) {
-    .i386, .x86_64 => true,
+    .x86, .x86_64 => true,
     else => false,
 };
 
@@ -40,7 +40,7 @@ pub const is_darwin = switch (os_tag) {
 };
 
 pub const is_posix = builtin.link_libc and (switch (os_tag) {
-    .linux, .minix, .macos, .watchos, .tvos, .ios, .solaris, .aix, .openbsd, .kfreebsd, .freebsd, .netbsd, .dragonfly, .hermit, .haiku, .cloudabi, .fuchsia => true,
+    .linux, .macos, .watchos, .tvos, .ios, .solaris, .aix, .openbsd, .freebsd, .netbsd, .dragonfly, .hermit, .haiku, .fuchsia => true,
     else => false,
 });
 
@@ -108,7 +108,7 @@ pub fn nanotime() u64 {
 
     var ts: std.c.timespec = undefined;
     std.posix.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts) catch unreachable;
-    return @as(u64, @intCast(ts.tv_sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.tv_nsec));
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
 pub const SpinWait = struct {

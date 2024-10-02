@@ -104,7 +104,7 @@ const LinuxLock = extern struct {
     }
 
     fn lockSlow(self: *Lock) void {
-        @setCold(true);
+        @branchHint(.unlikely);
 
         // if we got here, another task is contending the lock.
         // the FUTEX_WAITERS bit is set when the kernel determines
@@ -167,7 +167,7 @@ const LinuxLock = extern struct {
     }
 
     fn releaseSlow(self: *Lock) void {
-        @setCold(true);
+        @branchHint(.unlikely);
 
         const rc = std.os.linux.syscall4(
             .futex,

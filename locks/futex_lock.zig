@@ -41,49 +41,45 @@ pub const Lock = extern struct {
 
     inline fn acquireFast(self: *Lock) bool {
         if (utils.is_x86) {
-            return self.state.bitSet(@ctz(u32, LOCKED), .acquire) == UNLOCKED;
+            return self.state.fetchOr(LOCKED, .acquire) & LOCKED == UNLOCKED;
         }
 
         return self.state.cmpxchgWeak(UNLOCKED, LOCKED, .acquire, .monotonic) == null;
     }
 
     noinline fn acquireSlow(self: *Lock) void {
-        @setCold(true);
-
-        var spin = utils.SpinWait{};
-        while (spin.yield()) {
+        @branchHint(.unlikely);
+        
+        var state = for (0..if (utils.is_arm) 10 else 7) |i| {
+            if (utils.is_arm) {
+                asm volatile("wfe" ::: "memory");
+            } else {
+                for (0..@as(u32, 1) << @intCast(i)) |_| std.atomic.spinLoopHint();
+            }
             switch (self.state.load(.monotonic)) {
-                0 => if (self.acquireFast()) return,
-                1 => continue,
-                2 => break,
-                else => continue,
+                UNLOCKED => _ = self.state.cmpxchgStrong(UNLOCKED, LOCKED, .acquire, .monotonic) orelse return,
+                LOCKED => continue,
+                else => |state| break state,
             }
-        }
+        } else LOCKED;
 
-        while (true) : (Futex.wait(&self.state, CONTENDED, null) catch unreachable) {
-            if (utils.is_x86) {
-                if (self.state.swap(CONTENDED, .acquire) == 0) return;
-                continue;
+        while (true) {
+            if (state != CONTENDED) {
+                if (self.state.swap(CONTENDED, .acquire) == UNLOCKED) return;
             }
-
-            var state = self.state.load(.monotonic);
-            while (state != CONTENDED) {
-                state = switch (state) {
-                    0 => self.state.cmpxchgWeak(state, CONTENDED, .acquire, .monotonic) orelse return,
-                    1 => self.state.cmpxchgWeak(state, CONTENDED, .monotonic, .monotonic) orelse break,
-                    else => unreachable,
-                };
-            }
+            Futex.wait(&self.state, CONTENDED);
+            state = UNLOCKED;
         }
     }
 
     pub fn release(self: *Lock) void {
-        if (self.state.swap(UNLOCKED, .release) != CONTENDED) return;
-        return self.releaseSlow();
+        if (self.state.swap(UNLOCKED, .release) == CONTENDED) {
+            self.releaseSlow();
+        }
     }
 
     noinline fn releaseSlow(self: *Lock) void {
-        @setCold(true);
+        @branchHint(.unlikely);
 
         Futex.wake(&self.state, 1);
     }

@@ -48,7 +48,7 @@ pub const Lock = extern struct {
     }
 
     fn acquireSlow(self: *Lock) void {
-        @setCold(true);
+        @branchHint(.unlikely);
 
         var spin = utils.SpinWait{};
         var state = self.state.load(.monotonic);
@@ -106,7 +106,7 @@ pub const Lock = extern struct {
     }
 
     fn releaseSlow(self: *Lock) void {
-        @setCold(true);
+        @branchHint(.unlikely);
 
         self.pl_lock.acquire();
 

@@ -41,7 +41,7 @@ pub const Lock = extern struct {
     }
 
     fn acquireSlow(self: *Lock) void {
-        @setCold(true);
+        @branchHint(.unlikely);
 
         var spin: usize = 100;
         var state = self.state.load(.monotonic);
@@ -99,7 +99,7 @@ pub const Lock = extern struct {
     }
 
     fn releaseSlow(self: *Lock) void {
-        @setCold(true);
+        @branchHint(.unlikely);
 
         var state = self.state.load(.monotonic);
         while ((state >= WAITING) and (state & (LOCKED | WAKING) == 0)) {
@@ -120,7 +120,7 @@ pub const NtKeyedEvent = struct {
     var event_handle = Atomic(?std.os.windows.HANDLE).init(null);
 
     pub fn call(ptr: *const Atomic(u32), comptime event_fn: []const u8) void {
-        @setCold(true);
+        @branchHint(.unlikely);
 
         const handle = event_handle.load(.Unordered) orelse blk: {
             var handle: std.os.windows.HANDLE = undefined;

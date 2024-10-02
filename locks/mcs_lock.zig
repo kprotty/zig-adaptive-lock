@@ -44,7 +44,7 @@ pub const Lock = extern struct {
     }
 
     fn acquireSlow(noalias prev: *Waiter) void {
-        @setCold(true);
+        @branchHint(.unlikely);
 
         waiter.futex = Atomic(u32).init(0);
         prev.next.store(@intFromPtr(&waiter), .release);
@@ -61,7 +61,7 @@ pub const Lock = extern struct {
     }
 
     fn releaseSlow() void {
-        @setCold(true);
+        @branchHint(.unlikely);
 
         var spin = utils.SpinWait{};
         while (true) : ({
