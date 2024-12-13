@@ -1,75 +1,47 @@
-// Copyright (c) 2020 kprotty
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// 	http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 const std = @import("std");
-const utils = @import("../utils.zig");
-const Atomic = std.atomic.Atomic;
-const Futex = std.Thread.Futex;
 
 pub const Lock = extern struct {
-    pub const name = "mcs_lock";
+    pub const name = "mcs spin";
 
-    tail: Atomic(?*Waiter) = Atomic(?*Waiter).init(null),
-
-    const Waiter = struct {
-        next: Atomic(usize),
-        futex: Atomic(u32),
+    const Node = extern struct {
+        next: std.atomic.Value(?*Node) = .{ .raw = null },
+        ready: std.atomic.Value(bool) = .{ .raw = false },
     };
 
+    tail: std.atomic.Value(?*Node) = .{ .raw = null },
+
     pub fn init(self: *Lock) void {
-        self.* = Lock{};
+        self.* = .{};
     }
 
     pub fn deinit(self: *Lock) void {
         self.* = undefined;
     }
 
-    threadlocal var waiter: Waiter = undefined;
+    threadlocal var tls_node: Node = undefined;
 
     pub fn acquire(self: *Lock) void {
-        waiter.next.storeUnchecked(0);
-        const prev = self.tail.swap(&waiter, .AcqRel) orelse return;
-        acquireSlow(prev);
-    }
-
-    fn acquireSlow(noalias prev: *Waiter) void {
-        @setCold(true);
-
-        waiter.futex = Atomic(u32).init(0);
-        prev.next.store(@ptrToInt(&waiter), .Release);
-
-        var spin = utils.SpinWait{};
-        while (waiter.futex.load(.Acquire) == 0) {
-            if (!spin.yield()) utils.yieldThread(1);
+        const node = &tls_node;
+        node.* = .{};
+        if (self.tail.swap(node, .acq_rel)) |prev| {
+            @branchHint(.unlikely);
+            prev.next.store(node, .release);
+            while (!node.ready.load(.acquire)) std.atomic.spinLoopHint();
         }
     }
 
     pub fn release(self: *Lock) void {
-        _ = self.tail.compareAndSwap(&waiter, null, .Release, .Monotonic) orelse return;
-        releaseSlow();
-    }
-
-    fn releaseSlow() void {
-        @setCold(true);
-        
-        var spin = utils.SpinWait{};
-        while (true) : ({
-            if (!spin.yield()) utils.yieldThread(1);
-        }) {
-            const next = @intToPtr(?*Waiter, waiter.next.load(.Acquire)) orelse continue;
-            next.futex.store(1, .Release);
+        const node = &tls_node;
+        _ = self.tail.cmpxchgStrong(node, null, .release, .monotonic) orelse {
+            @branchHint(.likely);
             return;
-        }
+        };
+
+        const next = while (true) : (std.atomic.spinLoopHint()) {
+            break node.next.load(.acquire) orelse continue;
+        };
+
+        next.ready.store(true, .release);
     }
 };
+

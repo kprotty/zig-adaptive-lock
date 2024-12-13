@@ -1,68 +1,51 @@
-// Copyright (c) 2020 kprotty
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// 	http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 const std = @import("std");
-const utils = @import("../utils.zig");
+const builtin = @import("builtin");
 
-pub const Lock = 
-    if (utils.is_windows)
-        WindowsLock
-    else if (utils.is_posix)
-        PosixLock
-    else
-        void;
+pub const Lock = switch (builtin.os.tag) {
+    .windows => SRWLock,
+    else => PthreadLock,
+};
 
-const WindowsLock = extern struct {
-    pub const name = "CRITICAL_SECTION";
+const SRWLock = extern struct {
+    pub const name = "SRWLOCK";
 
-    cs: std.os.windows.CRITICAL_SECTION,
+    srwlock: std.os.windows.SRWLOCK = std.os.windows.SRWLOCK_INIT,
 
-    pub fn init(self: *Lock) void {
-        std.os.windows.kernel32.InitializeCriticalSection(&self.cs);
+    pub fn init(self: *@This()) void {
+        self.* = .{};
     }
 
-    pub fn deinit(self: *Lock) void {
-        std.os.windows.kernel32.DeleteCriticalSection(&self.cs);
+    pub fn deinit(self: *@This()) void {
+        self.* = undefined;
     }
 
-    pub fn acquire(self: *Lock) void {
-        std.os.windows.kernel32.EnterCriticalSection(&self.cs);
+    pub fn acquire(self: *@This()) void {
+        std.os.windows.kernel32.AcquireSRWLockExclusive(&self.srwlock);
     }
 
-    pub fn release(self: *Lock) void {
-        std.os.windows.kernel32.LeaveCriticalSection(&self.cs);
+    pub fn release(self: *@This()) void {
+        std.os.windows.kernel32.ReleaseSRWLockExclusive(&self.srwlock);
     }
 };
 
-const PosixLock = extern struct {
+const PthreadLock = extern struct {
     pub const name = "pthread_mutex_t";
 
-    mutex: std.c.pthread_mutex_t,
+    mutex: std.c.pthread_mutex_t = .{},
 
-    pub fn init(self: *Lock) void {
-        self.mutex = .{};
+    pub fn init(self: *@This()) void {
+        self.* = .{};
     }
 
-    pub fn deinit(self: *Lock) void {
-        _ = std.c.pthread_mutex_destroy(&self.mutex);
+    pub fn deinit(self: *@This()) void {
+        std.debug.assert(std.c.pthread_mutex_destroy(&self.mutex) == .SUCCESS);
     }
 
-    pub fn acquire(self: *Lock) void {
+    pub fn acquire(self: *@This()) void {
         std.debug.assert(std.c.pthread_mutex_lock(&self.mutex) == .SUCCESS);
     }
 
-    pub fn release(self: *Lock) void {
+    pub fn release(self: *@This()) void {
         std.debug.assert(std.c.pthread_mutex_unlock(&self.mutex) == .SUCCESS);
     }
 };
