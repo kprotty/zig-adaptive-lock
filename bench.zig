@@ -16,13 +16,13 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const locks = .{
-    // Spin Locks
-    @import("locks/spin_lock.zig").Lock,
-    @import("locks/mcs_lock.zig").Lock,
-
     // OS Locks
     @import("locks/os_lock.zig").Lock,
     @import("locks/pi_lock.zig").Lock,
+
+    // Spin Locks
+    @import("locks/spin_lock.zig").Lock,
+    @import("locks/mcs_lock.zig").Lock,
 };
 
 fn help() void {
@@ -291,13 +291,13 @@ const Worker = struct {
                         unlocked = work_unlocked.count(&prng);
                     }
 
-                    WorkUnit.run(locked);
+                    WorkUnit.run(unlocked);
 
                     const acquire_begin = std.time.Instant.now() catch unreachable;
                     lock.acquire();
                     const acquire_end = std.time.Instant.now() catch unreachable;
 
-                    WorkUnit.run(unlocked);
+                    WorkUnit.run(locked);
                     lock.release();
 
                     const latency = acquire_end.since(acquire_begin);
